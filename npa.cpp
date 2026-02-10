@@ -207,16 +207,41 @@ int overlapMSchemeOne(const vector<PairM*>& pairMs, const vector<int>& basisMBra
     }
     generalMultiCommutator(bra, ket, resultQ);
 
-    vector<vector<Eigen::SparseMatrix<double, Eigen::RowMajor>>> qbar;
+    //vector<vector<Eigen::SparseMatrix<double, Eigen::RowMajor>>> qbar;
+    Eigen::SparseMatrix<double, Eigen::RowMajor> qbar(orbitNumber ^ 2, orbitNumber ^ 2);
+
 
     for (int i = 0; i < orbitNumber; i++) {
         for (int j = 0; j < orbitNumber; j++) {
-            for (int k = 0; k < resultQ.size(); k++) {
-
-                // to do
+            for (int k = 0; k < orbitNumber; k++) {
+                for (int l = 0; l < orbitNumber; l++) {
+                    for (int m = 0; m < resultQ.size(); m++) {
+                        qbar.coeffRef(i * orbitNumber + k, j * orbitNumber + l) +=
+                            (resultQ[m].lhs().coeff(i, j) * resultQ[m].rhs().coeff(k, l)
+                            - resultQ[m].lhs().coeff(i, k) * resultQ[m].rhs().coeff(j, l)
+                            + resultQ[m].lhs().coeff(i, l) * resultQ[m].rhs().coeff(j, k)
+                            + resultQ[m].lhs().coeff(j, k) * resultQ[m].rhs().coeff(i, l)
+                            - resultQ[m].lhs().coeff(j, l) * resultQ[m].rhs().coeff(i, k)
+                            + resultQ[m].lhs().coeff(j, l) * resultQ[m].rhs().coeff(i, k)) / 6;
+                    }
+                }
             }
         }
     }
+
+    Eigen::SparseMatrix<double, Eigen::RowMajor> Bab(orbitNumber, orbitNumber);
+
+    for (int i = 0; i < orbitNumber; i++) {
+        for (int j = 0; j < orbitNumber; j++) {
+            for (int k = 0; k < orbitNumber; k++) {
+                for (int l = 0; l < orbitNumber; l++) {
+                    // to do
+                }
+            }
+        }
+    }
+
+    Bab *= 12;
 
     for (int i = 0; i < basisMBra.size(); i++) {
         delete bra[i];
