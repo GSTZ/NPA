@@ -187,7 +187,7 @@ bool judgeMBasis(const vector<PairM*>& pairMs, const vector<int>& basisM) {
 
 int overlapMScheme();
 
-int overlapMSchemeOne(const vector<PairM*>& pairMs, const vector<int>& basisMBra,
+double overlapMSchemeOne(const vector<PairM*>& pairMs, const vector<int>& basisMBra,
     const vector<int>& basisMKet, const int orbitNumber) {
     double overlap = 0.0;
     vector<Eigen::Product<Eigen::SparseMatrix<double, Eigen::RowMajor>, Eigen::SparseMatrix<double, Eigen::RowMajor>,
@@ -230,18 +230,21 @@ int overlapMSchemeOne(const vector<PairM*>& pairMs, const vector<int>& basisMBra
     }
 
     Eigen::SparseMatrix<double, Eigen::RowMajor> Bab(orbitNumber, orbitNumber);
+    auto pN1 = pairMs[basisMBra[basisMBra.size() - 2]]->pab;
 
     for (int i = 0; i < orbitNumber; i++) {
         for (int j = 0; j < orbitNumber; j++) {
             for (int k = 0; k < orbitNumber; k++) {
                 for (int l = 0; l < orbitNumber; l++) {
-                    // to do
+                    Bab.coeffRef(i * orbitNumber + k, j * orbitNumber + l) += 12 * pN1.coeff(i, j)
+                    * qbar.coeff(i * orbitNumber + k, j * orbitNumber + l);
                 }
             }
         }
     }
 
-    Bab *= 12;
+    Eigen::SparseMatrix<double, Eigen::RowMajor> pnBn = basisMBra.back() * Bab;
+    overlap = -2 * sparseTrace(pnBn);
 
     for (int i = 0; i < basisMBra.size(); i++) {
         delete bra[i];
