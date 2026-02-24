@@ -62,7 +62,7 @@ int main() {
 
     vector<vector<int>> basesZM;
 
-    generateMBases(pairZs, pairZMs, Z / 2, basesZ, basesZM, pairJMMap);
+    generateMBases(pairZs, pairZMs, Z / 2, basesZ, pairJMMap, basesZM);
 
 
     return 0;

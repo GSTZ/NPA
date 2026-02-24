@@ -139,7 +139,7 @@ int initializePairM(const vector<Pair*>& pairs, const vector<Orbit*>& orbits,
 }
 
 int generateMBases(const vector<Pair*>& pairs, const vector<PairM*>& pairMs, const int& pairNumber,
-    const vector<vector<int>>& bases, vector<vector<int>>& basesM, const vector<vector<int>>& pairJMMap) {
+    const vector<vector<int>>& bases, const vector<vector<int>>& pairJMMap, vector<vector<int>>& basesM) {
     for (const auto& basis : bases) {
         vector<int> basisM;
         generateMBasis(pairs, pairMs, pairNumber, basis, basisM, pairJMMap, basesM);
@@ -185,7 +185,20 @@ bool judgeMBasis(const vector<PairM*>& pairMs, const vector<int>& basisM) {
 }
 
 
-int overlapMScheme();
+int overlapMScheme(const vector<PairM*>& pairMs, const vector<vector<int>>& basesM, const int orbitNumber,
+    vector<vector<double>>& overlapMap) {
+
+    for (int i = 0; i < basesM.size(); i++) {
+        for (int j = 0; j < basesM.size(); j++) {
+            const auto& basisMBra = basesM[i];
+            const auto& basisMKet = basesM[j];
+            double overlap = overlapMSchemeOne(pairMs, basisMBra, basisMKet, orbitNumber);
+            overlapMap[i][j] = overlap;
+        }
+    }
+
+    return 0;
+}
 
 double overlapMSchemeOne(const vector<PairM*>& pairMs, const vector<int>& basisMBra,
     const vector<int>& basisMKet, const int orbitNumber) {
@@ -205,10 +218,66 @@ double overlapMSchemeOne(const vector<PairM*>& pairMs, const vector<int>& basisM
         pNewKet->pab = pairMs[basisMKet[i]]->pab;
         ket.push_back(pNewKet);
     }
-    generalMultiCommutator(bra, ket, resultQ);
+    //generalMultiCommutator(bra, ket, resultQ);
 
     //vector<vector<Eigen::SparseMatrix<double, Eigen::RowMajor>>> qbar;
     Eigen::SparseMatrix<double, Eigen::RowMajor> qbar(orbitNumber ^ 2, orbitNumber ^ 2);
+
+    //N2Qaby6(bra, ket, orbitNumber, qbar);
+
+
+    /*for (int i = 0; i < orbitNumber; i++) {
+        for (int j = 0; j < orbitNumber; j++) {
+            for (int k = 0; k < orbitNumber; k++) {
+                for (int l = 0; l < orbitNumber; l++) {
+                    for (int m = 0; m < resultQ.size(); m++) {
+                        qbar.coeffRef(i * orbitNumber + k, j * orbitNumber + l) +=
+                            (resultQ[m].lhs().coeff(i, j) * resultQ[m].rhs().coeff(k, l)
+                            - resultQ[m].lhs().coeff(i, k) * resultQ[m].rhs().coeff(j, l)
+                            + resultQ[m].lhs().coeff(i, l) * resultQ[m].rhs().coeff(j, k)
+                            + resultQ[m].lhs().coeff(j, k) * resultQ[m].rhs().coeff(i, l)
+                            - resultQ[m].lhs().coeff(j, l) * resultQ[m].rhs().coeff(i, k)
+                            + resultQ[m].lhs().coeff(j, l) * resultQ[m].rhs().coeff(i, k)) / 6;
+                    }
+                }
+            }
+        }
+    }*/
+
+    Eigen::SparseMatrix<double, Eigen::RowMajor> Bab(orbitNumber, orbitNumber);
+    auto pN1 = pairMs[basisMBra[basisMBra.size() - 2]]->pab;
+
+    N1Bab(bra, ket, orbitNumber, qbar, pN1, Bab);
+
+    /*for (int i = 0; i < orbitNumber; i++) {
+        for (int j = 0; j < orbitNumber; j++) {
+            for (int k = 0; k < orbitNumber; k++) {
+                for (int l = 0; l < orbitNumber; l++) {
+                    Bab.coeffRef(i * orbitNumber + k, j * orbitNumber + l) += 12 * pN1.coeff(i, j)
+                    * qbar.coeff(i * orbitNumber + k, j * orbitNumber + l);
+                }
+            }
+        }
+    }*/
+
+    Eigen::SparseMatrix<double, Eigen::RowMajor> pnBn = pairMs[basisMBra.back()]->pab * Bab;
+    overlap = -2 * sparseTrace(pnBn);
+
+    for (int i = 0; i < basisMBra.size(); i++) {
+        //delete bra[i];
+        delete ket[i];
+    }
+    return overlap;
+}
+
+
+int N2Qaby6(const vector<PairNew*>& bra, const vector<PairNew*>& ket, const int orbitNumber,
+    Eigen::SparseMatrix<double, Eigen::RowMajor>& qbar) {
+
+    vector<Eigen::Product<Eigen::SparseMatrix<double, Eigen::RowMajor>, Eigen::SparseMatrix<double, Eigen::RowMajor>,
+    Eigen::AliasFreeProduct>> resultQ;
+
+    generalMultiCommutator(bra, ket, resultQ);
 
 
     for (int i = 0; i < orbitNumber; i++) {
@@ -228,9 +297,15 @@ double overlapMSchemeOne(const vector<PairM*>& pairMs, const vector<int>& basisM
             }
         }
     }
+    return 0;
+}
 
-    Eigen::SparseMatrix<double, Eigen::RowMajor> Bab(orbitNumber, orbitNumber);
-    auto pN1 = pairMs[basisMBra[basisMBra.size() - 2]]->pab;
+
+int N1Bab(const vector<PairNew*>& bra, const vector<PairNew*>& ket, const int orbitNumber,
+    Eigen::SparseMatrix<double, Eigen::RowMajor>& qbar, Eigen::SparseMatrix<double, Eigen::RowMajor>& pN1,
+    Eigen::SparseMatrix<double, Eigen::RowMajor>& Bab) {
+
+    N2Qaby6(bra, ket, orbitNumber, qbar);
 
     for (int i = 0; i < orbitNumber; i++) {
         for (int j = 0; j < orbitNumber; j++) {
@@ -243,14 +318,7 @@ double overlapMSchemeOne(const vector<PairM*>& pairMs, const vector<int>& basisM
         }
     }
 
-    Eigen::SparseMatrix<double, Eigen::RowMajor> pnBn = basisMBra.back() * Bab;
-    overlap = -2 * sparseTrace(pnBn);
-
-    for (int i = 0; i < basisMBra.size(); i++) {
-        delete bra[i];
-        delete ket[i];
-    }
-    return overlap;
+    return 0;
 }
 
 
@@ -312,5 +380,99 @@ int generalMultiCommutator(const vector<PairNew*>& bra, const vector<PairNew*>& 
             }
         }
     }
+    return 0;
+}
+
+
+int gramSchmidt(const vector<vector<double>>& overlapMap, vector<vector<int>>& basesM,
+    vector<vector<int>>& pairJMMap, vector<vector<double>>& orthogonalBasis) {
+
+    int dim = static_cast<int>(overlapMap.size());
+
+    vector omNew(dim, vector(dim, 0.0));
+    for (int i = 0; i < dim; i++) {
+        omNew[i][i] = 1.0;
+    }
+
+    vector<int> validIndices;
+    vector<int> invalidIndices;
+
+    // 预计算每个向量属于哪个块
+    vector block_index(dim, -1);
+    for (int b = 0; b < pairJMMap.size(); b++) {
+        const int start = pairJMMap[b][0];
+        const int end = pairJMMap[b].back() + 1;
+        for (int i = start; i < end; i++) {  // 注意：i < end
+            block_index[i] = b;
+        }
+    }
+
+    // 对每个块单独处理
+    for (const auto& block : pairJMMap) {
+        const int start = block[0];
+        const int end = block.back() + 1;
+
+        for (int k = start; k < end; k++) {  // 注意：k < end
+            // 投影减法
+            for (int j : validIndices) {
+                // 只处理同一块内的向量
+                if (block_index[j] != block_index[k]) continue;
+
+                double overlap_kj = 0.0;
+                // 只计算块内的重叠积分
+                for (int alpha = start; alpha < end; alpha++) {  // alpha < end
+                    for (int beta = start; beta < end; beta++) {  // beta < end
+                        overlap_kj += omNew[k][alpha] * overlapMap[alpha][beta] * omNew[j][beta];
+                    }
+                }
+
+                // 向量减法
+                for (int alpha = 0; alpha < dim; alpha++) {
+                    omNew[k][alpha] -= overlap_kj * omNew[j][alpha];
+                }
+            }
+
+            // 计算范数（只在块内计算）
+            double norm_k_sq = 0.0;
+            for (int alpha = start; alpha < end; alpha++) {  // alpha < end
+                for (int beta = start; beta < end; beta++) {  // beta < end
+                    norm_k_sq += omNew[k][alpha] * overlapMap[alpha][beta] * omNew[k][beta];
+                }
+            }
+
+            if (norm_k_sq < 1e-10) {
+                invalidIndices.push_back(k);
+                continue;
+            }
+
+            const double norm_k = sqrt(norm_k_sq);
+            for (int alpha = 0; alpha < dim; alpha++) {
+                omNew[k][alpha] /= norm_k;
+            }
+            validIndices.push_back(k);
+        }
+    }
+
+    // 构建正交基
+    //std::vector<std::vector<double>> orthogonalBasis;
+    for (const int idx : validIndices) {
+        orthogonalBasis.push_back(omNew[idx]);
+    }
+
+    // 删除无效基矢（从后往前删除以避免索引问题）
+    /*sort(invalidIndices.begin(), invalidIndices.end(), greater<int>());
+    for (int k : invalidIndices) {
+        basesM.erase(basesM.begin() + k);
+        //ystrallp.erase(ystrallp.begin() + k);
+        overlapMap.erase(overlapMap.begin() + k);
+        for (auto& row : overlapMap) {
+            row.erase(row.begin() + k);
+        }
+        for (auto& vec : orthogonalBasis) {
+            vec.erase(vec.begin() + k);
+        }
+    }*/
+
+
     return 0;
 }

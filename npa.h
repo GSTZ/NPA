@@ -25,7 +25,7 @@ int initializePairM(const vector<Pair*>& pairs, const vector<Orbit*>& orbits,
     const vector<OrbitM*>& orbitMs, vector<PairM*>& pairMs, vector<vector<int>>& pairJMMap);
 
 int generateMBases(const vector<Pair*>& pairs, const vector<PairM*>& pairMs, const int& pairNumber,
-    const vector<vector<int>>& bases, vector<vector<int>>& basesM, const vector<vector<int>>& pairJMMap);
+    const vector<vector<int>>& bases, const vector<vector<int>>& pairJMMap, vector<vector<int>>& basesM);
 
 int generateMBasis(const vector<Pair*>& pairs, const vector<PairM*>& pairMs, const int& pairNumber,
     const vector<int>& basis, const vector<int>& basisM, const vector<vector<int>>& pairJMMap,
@@ -36,5 +36,18 @@ bool judgeMBasis(const vector<PairM*>& pairMs, const vector<int>& basisM);
 int generalMultiCommutator(const vector<PairNew*>& bra, const vector<PairNew*>& ket,
     vector<Eigen::Product<Eigen::SparseMatrix<double, Eigen::RowMajor>, Eigen::SparseMatrix<double, Eigen::RowMajor>,
     Eigen::AliasFreeProduct>>& resultQ);
+
+double overlapMSchemeOne(const vector<PairM*>& pairMs, const vector<int>& basisMBra,
+    const vector<int>& basisMKet, const int orbitNumber);
+
+int N2Qaby6(const vector<PairNew*>& bra, const vector<PairNew*>& ket, const int orbitNumber,
+    Eigen::SparseMatrix<double, Eigen::RowMajor>& qbar);
+
+int N1Bab(const vector<PairNew*>& bra, const vector<PairNew*>& ket, const int orbitNumber,
+    Eigen::SparseMatrix<double, Eigen::RowMajor>& qbar, Eigen::SparseMatrix<double, Eigen::RowMajor>& pN1,
+    Eigen::SparseMatrix<double, Eigen::RowMajor>& Bab);
+
+int overlapMScheme(const vector<PairM*>& pairMs, const vector<vector<int>>& basesM, const int orbitNumber,
+    vector<vector<double>>& overlapMap);
 
 #endif //INC_1_NPA_H
