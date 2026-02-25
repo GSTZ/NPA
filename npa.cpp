@@ -3,7 +3,8 @@
 #include "npa.h"
 
 #include <string>
-#include <vector>
+#include <algorithm>
+#include <numeric>
 
 using namespace std;
 
@@ -15,6 +16,22 @@ T sparseTrace(const Eigen::SparseMatrix<T, Options>& mat) {
     }
     return trace;
 }
+
+
+void permuteWithSTL(vector<int>& nums, vector<vector<int>>& permutations) {
+    sort(nums.begin(), nums.end()); // 必须先排序
+    int count = 0;
+    do {
+        vector<int> tem;
+        for (int x : nums) {
+            tem.push_back(x);
+        }
+        permutations.push_back(tem);
+        count++;
+    } while (next_permutation(nums.begin(), nums.end()));
+}
+
+
 
 int generateBasis(const vector<Pair*>& pairs, const int& pairNumber, const vector<int>& basis,
     vector<vector<int>>& bases, const vector<PairLimit*>& limits) {
@@ -475,4 +492,81 @@ int gramSchmidt(const vector<vector<double>>& overlapMap, vector<vector<int>>& b
 
 
     return 0;
+}
+
+
+int transferMatrix(const vector<Pair*>& pairs, const vector<PairM*>& pairMs, const vector<vector<int>>& basisJ,
+    const vector<vector<vector<int>>>& Jis, const vector<vector<int>>& basisM) {
+    int rows = 0;
+    for (const auto& row : Jis) {
+        rows += static_cast<int>(row.size());
+    }
+    const int cols = static_cast<int>(basisM.size());
+    vector<vector<double>> transformMatrix(rows, vector(cols, 0.0));
+
+    for (int i = 0; i < cols; i++) {
+        int count = 0;
+        for (int j = 0; j < basisJ.size(); j++) {
+            const auto& basis = basisJ[j];
+            for (int k = 0; k < Jis[j].size(); k++) {
+                transformMatrix[count][i] = transferMatrixJMOne(pairs, pairMs, basis, Jis[j][k], basisM[i]);
+                count++;
+            }
+        }
+    }
+
+    return 0;
+}
+
+
+double transferMatrixJMOne(const vector<Pair*>& pairs, const vector<PairM*>& pairMs, const vector<int>& basis,
+    const vector<int>& jis, const vector<int>& basisM) {
+    double Tcg = 1.0;
+    vector<pair<int, int>> classify;
+    int type = pairs[basis[0]]->index;
+    pair se = {0, 0};
+    for (const int bs : basis) {
+        if (pairs[bs]->index == type) {
+            se.second += 1;
+        } else {
+            classify.push_back(se);
+            se = {se.second, se.second + 1};
+        }
+    }
+    classify.push_back(se);
+
+    int M0 = 0;
+    for (int i = 0; i < classify.size(); i++) {
+        auto cf = classify[i];
+        vector jisSliced(jis.begin() + cf.first, jis.begin() + cf.second);
+        vector<int> mis;
+        for (int j = cf.first; j < cf.second; j++) {
+            mis.push_back(pairMs[basisM[j]]->m);
+        }
+        int J0 = jis[cf.first - 1];
+
+        Tcg *= CgJ0JnrM0m1mn(J0, M0, pairs[basis[cf.first]]->j, jisSliced, mis);
+
+        M0 += accumulate(mis.begin(), mis.end(), 0);
+    }
+
+    return Tcg;
+}
+
+
+double CgJ0JnrM0m1mn(const int J0, const int M0, const int r, const vector<int>& jis, vector<int> mis) {
+    double cg = 0.0;
+    vector<vector<int>> permutation;
+    permuteWithSTL(mis, permutation);
+    for (const auto& element : permutation) {
+        double cgTem = 1.0;
+        auto J = J0;
+        auto M = M0;
+        for (int i = 0; i < element.size(); i++) {
+            cgTem *= CgInt(J, M, r, element[i], jis[i], M + element[i]);
+            M += element[i];
+        }
+        cg += cgTem;
+    }
+    return cg;
 }

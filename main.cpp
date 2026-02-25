@@ -64,6 +64,10 @@ int main() {
 
     generateMBases(pairZs, pairZMs, Z / 2, basesZ, pairJMMap, basesZM);
 
+    vector nums = {1, 1, 2};
+    vector<vector<int>> test;
+    permuteWithSTL(nums, test);
+
 
     return 0;
 }

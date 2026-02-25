@@ -8,6 +8,8 @@
 
 using namespace std;
 
+void permuteWithSTL(vector<int>& nums, vector<vector<int>>& permutations);
+
 int generateBasis(const vector<Pair*>& pairs, const int& pairNumber, const vector<int>& basis,
     vector<vector<int>>& bases, const vector<PairLimit*>& limits);
 
@@ -49,5 +51,10 @@ int N1Bab(const vector<PairNew*>& bra, const vector<PairNew*>& ket, const int or
 
 int overlapMScheme(const vector<PairM*>& pairMs, const vector<vector<int>>& basesM, const int orbitNumber,
     vector<vector<double>>& overlapMap);
+
+double transferMatrixJMOne(const vector<Pair*>& pairs, const vector<PairM*>& pairMs, const vector<int>& basis,
+    const vector<int>& jis, const vector<int>& basisM);
+
+double CgJ0JnrM0m1mn(const int J0, const int M0, const int r, const vector<int>& jis, vector<int> mis);
 
 #endif //INC_1_NPA_H
