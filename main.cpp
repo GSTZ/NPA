@@ -7,28 +7,7 @@
 
 using namespace std;
 int main() {
-    // int j1, j2, j3, m1, m2, m3;
-    //
-    // for (j1 = 0; j1 < 6; j1++) {
-    //     for (j2 = 0; j2 < 6; j2++) {
-    //         for (j3 = 0; j3 < 6; j3++) {
-    //             for (m1 = 0; m1 < 6; m1++) {
-    //                 for (m2 = 0; m2 < 6; m2++) {
-    //                     for (m3 = 0; m3 < 6; m3++) {
-    //                         double sixj = sixjSymbols(static_cast<double>(j1) / 2, static_cast<double>(j2) / 2,
-    //                             static_cast<double>(j3) / 2, static_cast<double>(m1) / 2,
-    //                             static_cast<double>(m2) / 2, static_cast<double>(m3) / 2);
-    //                         if (abs(sixj) > 0.000000001) {
-    //                             cout << sixj << endl;
-    //                         }
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
-    //double sixj = sixjSymbols(0.5, 1, 1.5, 2, 2.5, 2);
-    //cout << sixj << endl;
+
     string spsFile, pairFile;
     int Z, N, interactionNumber, orbitProtonNumber, orbitNeutronNumber, pairTypes, limitNumber;
     vector<Orbit*> orbitProton, orbitNeutron;
@@ -60,13 +39,12 @@ int main() {
 
     initializePairM(pairZs, orbitProton, orbitMProton, pairZMs, pairJMMap);
 
-    vector<vector<int>> basesZM;
+    vector<vector<int>> basesZM0, basesZM1;
 
-    generateMBases(pairZs, pairZMs, Z / 2, basesZ, pairJMMap, basesZM);
+    generateMBases(pairZs, pairZMs, Z / 2, basesZ, pairJMMap, basesZM0, basesZM1);
 
-    vector nums = {1, 1, 2};
-    vector<vector<int>> test;
-    permuteWithSTL(nums, test);
+    vector<vector<double>> transformMatrix;
+
 
 
     return 0;
