@@ -57,4 +57,8 @@ double transferMatrixJMOne(const vector<Pair*>& pairs, const vector<PairM*>& pai
 
 double CgJ0JnrM0m1mn(const int J0, const int M0, const int r, const vector<int>& jis, vector<int> mis);
 
+int gaby6(const vector<PairM*>& pairMs, const vector<int>& bra, const vector<int>& ket, const int orbitNumber,
+    Eigen::MatrixXd& gaby6Matrix);
+
+
 #endif //INC_1_NPA_H

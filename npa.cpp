@@ -662,3 +662,34 @@ int gaby6(const vector<PairM*>& pairMs, const vector<int>& bra, const vector<int
 
     return 0;
 }
+
+
+int fab(const vector<PairM*>& pairMs, const vector<int>& bra, const vector<int>& ket, const int orbitNumber,
+    Eigen::MatrixXd& fabMatrix) {
+    fabMatrix.resize(orbitNumber, orbitNumber);
+    fabMatrix.setZero();
+    vector<PairNew*> ketNext;
+    for (int i = 0; i < ket.size(); i++) {
+        auto pw = new PairNew();
+        pw->pab = pairMs[ket[i]]->pab;
+        ketNext.push_back(pw);
+    }
+
+    for (int i = 0; i < bra.size(); i++) {
+        auto braTem = bra;
+        braTem.erase(braTem.begin() + i);
+        auto Pk = pairMs[bra[i]];
+        vector<PairNew*> braNext;
+        for (int j = 0; j < braTem.size(); j++) {
+            auto pw = new PairNew();
+            pw->pab = pairMs[braTem[j]]->pab;
+            braNext.push_back(pw);
+        }
+        Eigen::SparseMatrix<double, Eigen::RowMajor> qbar(orbitNumber ^ 2, orbitNumber ^ 2);
+        Eigen::SparseMatrix<double, Eigen::RowMajor> Bab(orbitNumber, orbitNumber);
+
+        N1Bab(braNext, ketNext, orbitNumber, qbar, Bab);
+        fabMatrix = Pk->pab * Bab.transpose();
+    }
+    return 0;
+}
