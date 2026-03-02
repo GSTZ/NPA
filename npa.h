@@ -8,6 +8,10 @@
 
 using namespace std;
 
+void removeRow(Eigen::MatrixXd& matrix, unsigned int rowToRemove);
+
+void removeColumn(Eigen::MatrixXd& matrix, unsigned int colToRemove);
+
 void permuteWithSTL(vector<int>& nums, vector<vector<int>>& permutations);
 
 int generateBasis(const vector<Pair*>& pairs, const int& pairNumber, const vector<int>& basis,
@@ -17,6 +21,9 @@ bool judgeBasis(const vector<PairLimit*>& limits, const vector<int>& basis);
 
 int generateJi(const vector<Pair*>& pairs, const vector<vector<int>>& bases,
     vector<vector<vector<int>>>& JisList);
+
+int generateBasesJ(const vector<vector<vector<int>>>& JisList, const vector<vector<int>>& bases,
+    vector<vector<pair<int, int>>>& basesJ);
 
 int generateJiForOne(const vector<Pair*>& pairs, const vector<int>& basis, const vector<int>& jis, const int& pairNumber,
     vector<vector<int>>& jisList);
@@ -52,6 +59,9 @@ int N1Bab(const vector<PairNew*>& bra, const vector<PairNew*>& ket, const int or
 int overlapMScheme(const vector<PairM*>& pairMs, const vector<vector<int>>& basesM, const int orbitNumber,
     vector<vector<double>>& overlapMap);
 
+int transferMatrix(const vector<Pair*>& pairs, const vector<PairM*>& pairMs, const vector<vector<int>>& basisJ,
+    const vector<vector<vector<int>>>& Jis, const vector<vector<int>>& basisM, Eigen::MatrixXd& transformMatrix);
+
 double transferMatrixJMOne(const vector<Pair*>& pairs, const vector<PairM*>& pairMs, const vector<int>& basis,
     const vector<int>& jis, const vector<int>& basisM);
 
@@ -59,6 +69,9 @@ double CgJ0JnrM0m1mn(const int J0, const int M0, const int r, const vector<int>&
 
 int gaby6(const vector<PairM*>& pairMs, const vector<int>& bra, const vector<int>& ket, const int orbitNumber,
     Eigen::MatrixXd& gaby6Matrix);
+
+int fab(const vector<PairM*>& pairMs, const vector<int>& bra, const vector<int>& ket, const int orbitNumber,
+    Eigen::MatrixXd& fabMatrix);
 
 
 #endif //INC_1_NPA_H

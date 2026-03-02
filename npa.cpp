@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <iostream>
 #include <numeric>
+#include <ranges>
+#include <set>
 
 using namespace std;
 
@@ -16,6 +18,36 @@ T sparseTrace(const Eigen::SparseMatrix<T, Options>& mat) {
         trace += mat.coeff(i, i);
     }
     return trace;
+}
+
+
+void removeRow(Eigen::MatrixXd& matrix, unsigned int rowToRemove) {
+    unsigned int numRows = matrix.rows() - 1;
+    unsigned int numCols = matrix.cols();
+
+    // 如果删除的不是最后一行，则将下面的行整体上移覆盖
+    if (rowToRemove < numRows) {
+        matrix.block(rowToRemove, 0, numRows - rowToRemove, numCols)
+            = matrix.block(rowToRemove + 1, 0, numRows - rowToRemove, numCols);
+    }
+
+    // 缩小矩阵尺寸，但保留原有数据
+    matrix.conservativeResize(numRows, numCols);
+}
+
+
+void removeColumn(Eigen::MatrixXd& matrix, unsigned int colToRemove) {
+    unsigned int numRows = matrix.rows();
+    unsigned int numCols = matrix.cols() - 1;
+
+    // 如果删除的不是最后一列，则将右侧的列整体左移覆盖
+    if (colToRemove < numCols) {
+        matrix.block(0, colToRemove, numRows, numCols - colToRemove)
+            = matrix.block(0, colToRemove + 1, numRows, numCols - colToRemove);
+    }
+
+    // 缩小矩阵尺寸，但保留原有数据
+    matrix.conservativeResize(numRows, numCols);
 }
 
 
@@ -78,6 +110,32 @@ int generateJi(const vector<Pair*>& pairs, const vector<vector<int>>& bases, vec
         jis.push_back(pairs[basis[0]]->j);
         generateJiForOne(pairs, basis, jis, static_cast<int>(basis.size()), jisList);
         JisList.push_back(jisList);
+    }
+    return 0;
+}
+
+
+int generateBasesJ(const vector<vector<vector<int>>>& JisList, const vector<vector<int>>& bases,
+    vector<vector<pair<int, int>>>& basesJ) {
+    set<int> Js;
+    for (const auto& jis : JisList) {
+        for (const auto& basis : jis) {
+            Js.insert(basis.back());
+        }
+    }
+
+    for (const auto J : Js) {
+        for (int i = 0; i < bases.size(); i++) {
+            for (int j = 0; j < JisList[i].size(); j++) {
+                if (JisList[i][j].back() == J) {
+                    vector<pair<int, int>> temVector;
+                    for (int k = 0; k < bases[i].size(); k++) {
+                        temVector.emplace_back(bases[i][k], JisList[i][j][k]);
+                    }
+                    basesJ.push_back(temVector);
+                }
+            }
+        }
     }
     return 0;
 }
@@ -205,14 +263,14 @@ int judgeMBasis(const vector<PairM*>& pairMs, const vector<int>& basisM) {
 
 
 int overlapMScheme(const vector<PairM*>& pairMs, const vector<vector<int>>& basesM, const int orbitNumber,
-    vector<vector<double>>& overlapMap) {
+    Eigen::MatrixXd& overlapMap) {
 
     for (int i = 0; i < basesM.size(); i++) {
         for (int j = 0; j < basesM.size(); j++) {
             const auto& basisMBra = basesM[i];
             const auto& basisMKet = basesM[j];
             double overlap = overlapMSchemeOne(pairMs, basisMBra, basisMKet, orbitNumber);
-            overlapMap[i][j] = overlap;
+            overlapMap(i, j) = overlap;
         }
     }
 
@@ -406,14 +464,15 @@ int generalMultiCommutator(const vector<PairNew*>& bra, const vector<PairNew*>& 
 }
 
 
-int gramSchmidt(const vector<vector<double>>& overlapMap, vector<vector<int>>& basesM,
-    vector<vector<int>>& pairJMMap, vector<vector<double>>& orthogonalBasis) {
+int gramSchmidt(Eigen::MatrixXd& overlapMapJ, const vector<pair<int, int>>& blocks,
+    vector<vector<pair<int, int>>>& basesJ, Eigen::MatrixXd& orthogonalBasis) {
+    int dim = static_cast<int>(overlapMapJ.size());
 
-    int dim = static_cast<int>(overlapMap.size());
-
-    vector omNew(dim, vector(dim, 0.0));
+    Eigen::MatrixXd omNew;
+    omNew.resize(dim, dim);
+    omNew.setZero();
     for (int i = 0; i < dim; i++) {
-        omNew[i][i] = 1.0;
+        omNew(i, i) = 1.0;
     }
 
     vector<int> validIndices;
@@ -421,18 +480,18 @@ int gramSchmidt(const vector<vector<double>>& overlapMap, vector<vector<int>>& b
 
     // 预计算每个向量属于哪个块
     vector block_index(dim, -1);
-    for (int b = 0; b < pairJMMap.size(); b++) {
-        const int start = pairJMMap[b][0];
-        const int end = pairJMMap[b].back() + 1;
+    for (int b = 0; b < blocks.size(); b++) {
+        int start = blocks[b].first;
+        int end = blocks[b].second;
         for (int i = start; i < end; i++) {  // 注意：i < end
             block_index[i] = b;
         }
     }
 
     // 对每个块单独处理
-    for (const auto& block : pairJMMap) {
-        const int start = block[0];
-        const int end = block.back() + 1;
+    for (const auto& block : blocks) {
+        int start = block.first;
+        int end = block.second;
 
         for (int k = start; k < end; k++) {  // 注意：k < end
             // 投影减法
@@ -444,13 +503,13 @@ int gramSchmidt(const vector<vector<double>>& overlapMap, vector<vector<int>>& b
                 // 只计算块内的重叠积分
                 for (int alpha = start; alpha < end; alpha++) {  // alpha < end
                     for (int beta = start; beta < end; beta++) {  // beta < end
-                        overlap_kj += omNew[k][alpha] * overlapMap[alpha][beta] * omNew[j][beta];
+                        overlap_kj += omNew(k, alpha) * overlapMapJ(alpha, beta) * omNew(j, beta);
                     }
                 }
 
                 // 向量减法
                 for (int alpha = 0; alpha < dim; alpha++) {
-                    omNew[k][alpha] -= overlap_kj * omNew[j][alpha];
+                    omNew(k, alpha) -= overlap_kj * omNew(j, alpha);
                 }
             }
 
@@ -458,69 +517,78 @@ int gramSchmidt(const vector<vector<double>>& overlapMap, vector<vector<int>>& b
             double norm_k_sq = 0.0;
             for (int alpha = start; alpha < end; alpha++) {  // alpha < end
                 for (int beta = start; beta < end; beta++) {  // beta < end
-                    norm_k_sq += omNew[k][alpha] * overlapMap[alpha][beta] * omNew[k][beta];
+                    norm_k_sq += omNew(k, alpha) * overlapMapJ(alpha, beta) * omNew(k, beta);
                 }
             }
 
             if (norm_k_sq < 1e-10) {
+                cerr << "Warning: Found near-zero vector at k=" << k << ", possibly due to linear dependence.\n";
                 invalidIndices.push_back(k);
                 continue;
             }
 
-            const double norm_k = sqrt(norm_k_sq);
+            double norm_k = sqrt(norm_k_sq);
             for (int alpha = 0; alpha < dim; alpha++) {
-                omNew[k][alpha] /= norm_k;
+                omNew(k, alpha) /= norm_k;
             }
             validIndices.push_back(k);
         }
     }
 
     // 构建正交基
-    //std::vector<std::vector<double>> orthogonalBasis;
-    for (const int idx : validIndices) {
-        orthogonalBasis.push_back(omNew[idx]);
+    //vector<vector<double>> orthogonalBasis;
+    //for (int idx : validIndices) {
+        //orthogonalBasis.push_back(omNew[idx]);
+    //}
+    orthogonalBasis.resize(validIndices.size(), omNew.cols());
+    for (Eigen::Index i = 0; i < validIndices.size(); ++i) {
+        orthogonalBasis.row(i) = omNew.row(validIndices[i]);
     }
 
-    // 删除无效基矢（从后往前删除以避免索引问题）
-    /*sort(invalidIndices.begin(), invalidIndices.end(), greater<int>());
-    for (int k : invalidIndices) {
-        basesM.erase(basesM.begin() + k);
-        //ystrallp.erase(ystrallp.begin() + k);
-        overlapMap.erase(overlapMap.begin() + k);
-        for (auto& row : overlapMap) {
-            row.erase(row.begin() + k);
-        }
-        for (auto& vec : orthogonalBasis) {
-            vec.erase(vec.begin() + k);
-        }
-    }*/
+    //orthogonalBasis = omNew(validIndices, Eigen::all);
 
+    // 删除无效基矢（从后往前删除以避免索引问题）
+    ranges::sort(invalidIndices, greater<int>());
+    for (int k : invalidIndices) {
+        basesJ.erase(basesJ.begin() + k);
+        //ystrallp.erase(ystrallp.begin() + k);
+        removeRow(overlapMapJ, k);
+        removeColumn(overlapMapJ, k);
+
+        removeColumn(orthogonalBasis, k);
+    }
 
     return 0;
 }
 
 
-int transferMatrix(const vector<Pair*>& pairs, const vector<PairM*>& pairMs, const vector<vector<int>>& basisJ,
-    const vector<vector<vector<int>>>& Jis, const vector<vector<int>>& basisM, Eigen::MatrixXd& transformMatrix) {
-    int rows = 0;
-    for (const auto& row : Jis) {
-        rows += static_cast<int>(row.size());
-    }
-    const int cols = static_cast<int>(basisM.size());
-    Eigen::MatrixXd TM;
-    TM.resize(rows, cols);
-    TM.setZero();
+int matrixElementMtoJ(const Eigen::MatrixXd& overlapMapM, const Eigen::MatrixXd& transformMatrix,
+    Eigen::MatrixXd& overlapMapJ) {
+    overlapMapJ = transformMatrix * overlapMapM * transformMatrix.transpose();
+    return 0;
+}
 
-    transformMatrix = TM;
+
+int transferMatrix(const vector<Pair*>& pairs, const vector<PairM*>& pairMs,
+    const vector<vector<pair<int, int>>>& basesJ, const vector<vector<int>>& basisM,
+    Eigen::MatrixXd& transformMatrix) {
+    int rows = basesJ.size();
+    const int cols = static_cast<int>(basisM.size());
+
+    transformMatrix.resize(rows, cols);
+    transformMatrix.setZero();
 
     for (int i = 0; i < cols; i++) {
-        int count = 0;
-        for (int j = 0; j < basisJ.size(); j++) {
-            const auto& basis = basisJ[j];
-            for (int k = 0; k < Jis[j].size(); k++) {
-                transformMatrix(count, i) = transferMatrixJMOne(pairs, pairMs, basis, Jis[j][k], basisM[i]);
-                count++;
+        for (int j = 0; j < rows; j++) {
+            vector<int> basisPair;
+            vector<int> jis;
+            const auto& basis = basesJ[j];
+            for (int k = 0; k < basis.size(); k++) {
+                basisPair.push_back(basis[k].first);
+                jis.push_back(basis[k].second);
             }
+            transformMatrix(j, i) = transferMatrixJMOne(pairs, pairMs, basisPair,
+                jis, basisM[i]);
         }
     }
 
@@ -692,4 +760,11 @@ int fab(const vector<PairM*>& pairMs, const vector<int>& bra, const vector<int>&
         fabMatrix = Pk->pab * Bab.transpose();
     }
     return 0;
+}
+
+
+double reducedMatrixElement(const int& J, const int& JPrime, const int& M, const int& MPrime, const int& t,
+    const int& u, const double& matrixElement) {
+    double result = matrixElement / CgInt(JPrime, MPrime, t, u, J, M);
+    return result;
 }

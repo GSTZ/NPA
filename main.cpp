@@ -30,6 +30,9 @@ int main() {
     vector<vector<vector<int>>> JisList;
     generateJi(pairZs, basesZ, JisList);
 
+    vector<vector<pair<int, int>>> basesJZ;
+    generateBasesJ(JisList, basesZ, basesJZ);
+
     vector<OrbitM*> orbitMProton, orbitMNeutron;
     initializeOrbitM(orbitProton, orbitMProton);
     initializeOrbitM(orbitNeutron, orbitMNeutron);
