@@ -757,7 +757,7 @@ int fab(const vector<PairM*>& pairMs, const vector<int>& bra, const vector<int>&
         Eigen::SparseMatrix<double, Eigen::RowMajor> Bab(orbitNumber, orbitNumber);
 
         N1Bab(braNext, ketNext, orbitNumber, qbar, Bab);
-        fabMatrix = Pk->pab * Bab.transpose();
+        fabMatrix += Pk->pab * Bab.transpose();
     }
     return 0;
 }
@@ -767,4 +767,70 @@ double reducedMatrixElement(const int& J, const int& JPrime, const int& M, const
     const int& u, const double& matrixElement) {
     double result = matrixElement / CgInt(JPrime, MPrime, t, u, J, M);
     return result;
+}
+
+
+int qab(const int orbitNumber, const vector<OrbitM*>& orbitMs, Eigen::MatrixXd& qabMatrix) {
+    qabMatrix.resize(orbitNumber, orbitNumber);
+    qabMatrix.setZero();
+    for (int i = 0; i < orbitNumber; ++i) {
+        qabMatrix(i, i) = orbitMs[i]->spe;
+    }
+    return 0;
+}
+
+
+int oaby6(const int orbitNumber, const vector<Orbit*>& orbitAC, const vector<OrbitM*>& orbitMAC,
+    const vector<Orbit*>& orbitBD, const vector<OrbitM*>& orbitMBD,
+    const map<TBMEJ, map<pair<int, int>, double>>& tbmeJMap, Eigen::SparseMatrix<double>& oaby6Matrix) {
+    oaby6Matrix.resize(orbitNumber ^ 2, orbitNumber ^ 2);
+    for (int alpha = 0; alpha < orbitNumber; alpha++) {
+        for (int beta = 0; beta < orbitNumber; beta++) {
+            for (int gamma = 0; gamma < orbitNumber; gamma++) {
+                for (int delta = 0; delta < orbitNumber; delta++) {
+                    const auto ma = orbitMAC[alpha]->m;
+                    const auto mb = orbitMBD[beta]->m;
+                    const auto mc = orbitMAC[gamma]->m;
+                    const auto md = orbitMBD[delta]->m;
+                    if (ma + mb == mc + md) {
+                        double value = 0.0;
+                        auto a = indexOrbitJM(orbitAC, orbitMAC[alpha]);
+                        auto b = indexOrbitJM(orbitBD, orbitMBD[beta]);
+                        auto c = indexOrbitJM(orbitAC, orbitMAC[gamma]);
+                        auto d = indexOrbitJM(orbitBD, orbitMBD[delta]);
+                        auto ja = orbitMAC[alpha]->j;
+                        auto jb = orbitMBD[beta]->j;
+                        auto jc = orbitMAC[gamma]->j;
+                        auto jd = orbitMBD[delta]->j;
+                        auto tj = TBMEJ(a, b, c, d);
+                        auto JTList = tbmeJMap.find(tj)->second;
+                        for (const auto& jt : JTList) {
+                            value += sqrt((1 + kroneckerDelta(a, b)) * (1 + kroneckerDelta(c, d))) * jt.second
+                            * CgInt(ja, ma, jb, mb, jt.first.first, ma + mb)
+                            * CgInt(jc, mc, jd, md, jt.first.first, ma + mb);
+                        }
+                        oaby6Matrix.coeffRef(alpha * orbitNumber + beta, gamma * orbitNumber + delta) += value;
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+
+int indexOrbitJM(const vector<Orbit*>& orbits, const OrbitM* om) {
+    int index = -1;
+    for (int i = 0; i < orbits.size(); i++) {
+        auto os = orbits[i];
+        if (os->n == om->n && os->l == om->l && os->j == om->j) {
+            index = i;
+        }
+    }
+    return index;
+}
+
+
+int kroneckerDelta(const int a, const int b) {
+    return a == b ? 1 : 0;
 }

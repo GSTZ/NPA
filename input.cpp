@@ -160,3 +160,41 @@ int readPair(const string& filename, int& pairTypes, vector<Pair*>& pairs, int& 
     }
     return 0;
 }
+
+
+int readInteraction(const string& filename, vector<Orbit*>& orbitsP, vector<Orbit*>& orbitsN,
+    map<TBMEJ, map<pair<int, int>, double>>& tbmeJMap) {
+    ifstream infile(filename);
+    if (infile.is_open()) {
+        istringstream iss;
+        string line;
+        int total = 100;
+        int a, b, c, d, J, T;
+        double value;
+
+        getline(iss, line);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        iss.str(line);
+        iss >> total;
+
+        for (int i = 0; i < orbitsP.size(); i++) {
+            iss >> orbitsP[i]->spe;
+        }
+
+        for (int i = 0; i < orbitsN.size(); i++) {
+            iss >> orbitsN[i]->spe;
+        }
+
+        for (int i = 0; i < total; i++) {
+            getline(iss, line);
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            iss.str(line);
+            iss >> a >> b >> c >> d >> J >> T >> value;
+            auto tbmeJ = TBMEJ(a, b, c, d);
+            pair pair = {J, T};
+            tbmeJMap[tbmeJ][pair] += value;
+            iss.clear();
+        }
+    }
+    return 0;
+}

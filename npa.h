@@ -73,5 +73,9 @@ int gaby6(const vector<PairM*>& pairMs, const vector<int>& bra, const vector<int
 int fab(const vector<PairM*>& pairMs, const vector<int>& bra, const vector<int>& ket, const int orbitNumber,
     Eigen::MatrixXd& fabMatrix);
 
+int indexOrbitJM(const vector<Orbit*>& orbits, const OrbitM* om);
+
+int kroneckerDelta(const int a, const int b);
+
 
 #endif //INC_1_NPA_H

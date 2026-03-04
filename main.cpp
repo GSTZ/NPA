@@ -48,6 +48,8 @@ int main() {
 
     vector<vector<double>> transformMatrix;
 
+    map<TBMEJ, map<pair<int, int>, double>> tbmeJMap;
+
 
 
     return 0;

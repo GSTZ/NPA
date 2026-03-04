@@ -23,6 +23,7 @@ struct Orbit {
     int n;
     int l;
     int j; // 2 * j
+    double spe;
 };
 
 // M-scheme orbit
@@ -31,6 +32,7 @@ struct OrbitM {
     int l;
     int j; // 2 * j
     int m; // 2 * m
+    double spe;
 };
 
 // J-scheme pair
@@ -69,6 +71,27 @@ struct InteractionFile {
     int core;
     int A;
     double scale;
+};
+
+struct TBMEJ {
+    int a;
+    int b;
+    int c;
+    int d;
+
+    auto operator<=>(const TBMEJ&) const = default;
+};
+
+struct TBMEJHash {
+    std::size_t operator()(const TBMEJ& k) const {
+        std::size_t h1 = std::hash<int>{}(k.a);
+        std::size_t h2 = std::hash<int>{}(k.b);
+        std::size_t h3 = std::hash<int>{}(k.c);
+        std::size_t h4 = std::hash<int>{}(k.d);
+
+        // 经典的哈希组合方式，避免对称值（如 a=1,b=2 和 a=2,b=1）哈希冲突
+        return h1 ^ (h2 << 1) ^ (h3 << 2) ^ (h4 << 3);
+    }
 };
 
 int readSps(const string& filename, int& orbitProtonNumber, int& orbitNeutronNumber,
