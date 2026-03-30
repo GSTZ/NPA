@@ -24,6 +24,10 @@ struct Orbit {
     int l;
     int j; // 2 * j
     double spe;
+
+    bool operator==(const Orbit& other) const {
+        return n == other.n && l == other.l && j == other.j;
+    }
 };
 
 // M-scheme orbit
@@ -46,6 +50,7 @@ struct Pair {
 // M-scheme pair
 struct PairM {
     int index; // from 0
+    int indexJ;
     int j; // 2 * j
     int m; // 2 * m
     Parity parity;
@@ -96,10 +101,19 @@ struct TBMEJHash {
 
 int readSps(const string& filename, int& orbitProtonNumber, int& orbitNeutronNumber,
     vector<Orbit*>& orbitProton, vector<Orbit*>& orbitNeutron);
-int readInput(int& Z, int& N, string& spsFile, string& pairFile, int& interactionNumber,
+
+int readInput(int& Z, int& N, string& spsFile, string& pairFile, string& scFileP, string& scFileN,
+    int& interactionNumber,
     vector<InteractionFile*>& interactionFiles);
+
 int readPair(const string& filename, int& pairTypes, vector<Pair*>& pairs, int& limitNumber,
     vector<PairLimit*>& limits);
+
+int readInteraction(const string& filename, vector<Orbit*>& orbitsP, vector<Orbit*>& orbitsN,
+    map<TBMEJ, map<pair<int, int>, double>>& tbmeJMap);
+
+int readStructureCoefficient(const string& filename, vector<Pair*>& pairs, const int pairTypes,
+    const int orbitNumber);
 
 
 #endif //INC_1_INPUT_H

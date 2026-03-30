@@ -2,13 +2,14 @@
 // Created by admin on 2026/2/3.
 //
 #include <cmath>
+#include <iostream>
 
 using namespace std;
 
-int factorial(int n) {
+double factorial(int n) {
     if (n == 0) return 1;
-    int result = 1;
-    for (int i=1; i<=n; i++) {
+    double result = 1;
+    for (int i = 1; i <= n; i++) {
         result *= i;
     }
     return result;

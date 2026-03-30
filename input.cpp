@@ -47,7 +47,8 @@ int readSps(const string& filename, int& orbitProtonNumber, int& orbitNeutronNum
 }
 
 
-int readInput(int& Z, int& N, string& spsFile, string& pairFile, int& interactionNumber,
+int readInput(int& Z, int& N, string& spsFile, string& pairFile, string& scFileP, string& scFileN,
+    int& interactionNumber,
     vector<InteractionFile*>& interactionFiles) {
 
     ifstream infile("shell.dat");
@@ -74,6 +75,12 @@ int readInput(int& Z, int& N, string& spsFile, string& pairFile, int& interactio
         if (!line.empty() && line.back() == '\r') line.pop_back();
         iss.str(line);
         iss >> pairFile;
+        iss.clear();
+
+        getline(infile, line);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        iss.str(line);
+        iss >> scFileP >> scFileN;
         iss.clear();
 
         getline(infile, line);
@@ -168,11 +175,11 @@ int readInteraction(const string& filename, vector<Orbit*>& orbitsP, vector<Orbi
     if (infile.is_open()) {
         istringstream iss;
         string line;
-        int total = 100;
+        int total = 0;
         int a, b, c, d, J, T;
         double value;
 
-        getline(iss, line);
+        getline(infile, line);
         if (!line.empty() && line.back() == '\r') line.pop_back();
         iss.str(line);
         iss >> total;
@@ -185,14 +192,42 @@ int readInteraction(const string& filename, vector<Orbit*>& orbitsP, vector<Orbi
             iss >> orbitsN[i]->spe;
         }
 
+        iss.clear();
+
         for (int i = 0; i < total; i++) {
-            getline(iss, line);
+            getline(infile, line);
             if (!line.empty() && line.back() == '\r') line.pop_back();
             iss.str(line);
             iss >> a >> b >> c >> d >> J >> T >> value;
-            auto tbmeJ = TBMEJ(a, b, c, d);
+            auto tbmeJ = TBMEJ(a - 1, b - 1, c - 1, d - 1);
             pair pair = {J, T};
             tbmeJMap[tbmeJ][pair] += value;
+            iss.clear();
+        }
+    }
+    return 0;
+}
+
+
+int readStructureCoefficient(const string& filename, vector<Pair*>& pairs, const int pairTypes,
+    const int orbitNumber) {
+
+    for (auto& pair : pairs) {
+        pair->yabr.resize(orbitNumber, orbitNumber);
+        pair->yabr.setZero();
+    }
+
+    ifstream infile(filename);
+    if (infile.is_open()) {
+        istringstream iss;
+        string line;
+        while (getline(infile, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            iss.str(line);
+            int a, b, pairIndex;
+            double value;
+            iss >> a >> b >> pairIndex >> value;
+            pairs[pairIndex - 1]->yabr(a - 1, b - 1) = value;
             iss.clear();
         }
     }
