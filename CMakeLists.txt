@@ -1,9 +1,15 @@
 cmake_minimum_required(VERSION 4.1)
-project(1)
+project(npaOdd)
 
 set(CMAKE_CXX_STANDARD 26)
 
-add_executable(1 main.cpp
+find_package(OpenMP REQUIRED)
+
+add_executable(npaOdd main.cpp
         CG.cpp
         input.cpp
-        npa.cpp)
+        npa.cpp
+        CGC.h)
+
+target_compile_options(npaOdd PRIVATE -O3 -fopenmp)
+target_link_options(npaOdd PRIVATE -fopenmp)

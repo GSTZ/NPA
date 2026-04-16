@@ -12,6 +12,8 @@ using namespace std;
 template <typename T>
 int kroneckerDelta(const T& a, const T& b);
 
+bool isSameVector(vector<int> a, vector<int> b);
+
 void removeRow(Eigen::MatrixXd& matrix, unsigned int rowToRemove);
 
 void removeColumn(Eigen::MatrixXd& matrix, unsigned int colToRemove);
@@ -92,10 +94,10 @@ double CgJ0JnrM0m1mn(const int J0, const int M0, const int r, const int start,
     const vector<int>& jis, vector<int>& mis);
 
 int gaby6(const vector<PairM*>& pairMs, const vector<int>& bra, const vector<int>& ket, const int orbitNumber,
-    Eigen::MatrixXd& gaby6Matrix);
+    Eigen::MatrixXd& gaby6Matrix, map<vector<int>, Eigen::SparseMatrix<double, Eigen::RowMajor>>& qbarMap);
 
 int fab(const vector<PairM*>& pairMs, const vector<int>& bra, const vector<int>& ket, const int orbitNumber,
-    Eigen::MatrixXd& fabMatrix);
+    Eigen::MatrixXd& fabMatrix, map<vector<int>, Eigen::SparseMatrix<double, Eigen::RowMajor>>& qbarMap);
 
 double reducedMatrixElement(const int& J, const int& JPrime, const int& M, const int& MPrime, const int& t,
     const int& u, const double& matrixElement);
@@ -212,6 +214,98 @@ int generateReducedOrthogonalQJ(const vector<int>& ts,
     const vector<vector<Eigen::MatrixXd>>& qJMatrix01,
     const Eigen::MatrixXd& orthogonalBasis,
     vector<vector<Eigen::MatrixXd>>& reducedJMatrix);
+
+double calculate_sum(int n, int n_prime, int l, int l_prime, int lambda);
+
+double calculate_integral(int n, int n_prime, int l, int l_prime, int lambda, double alpha);
+
+double computeQ(int j11, int j22, double tt, int n11, int l11, int n22, int l22,double alpha);
+
+int generateQj1j2J(const vector<Orbit*>& orbits,
+    const int t,
+    const double alpha,
+    Eigen::MatrixXd& qj1j2J);
+
+int qj1j2JtoM(const vector<OrbitM*>& orbitMs,
+    const vector<Orbit*>& orbits,
+    const Eigen::MatrixXd& qj1j2J,
+    const int t,
+    Eigen::MatrixXd& qj1j2M);
+
+int generateQOperatorM(const vector<vector<int>>& braBasesM,
+    const vector<vector<int>>& ketBasesM,
+    const std::vector<std::vector<Eigen::MatrixXd>>& fabMap,
+    const Eigen::MatrixXd& qj1j2M,
+    Eigen::MatrixXd& Qop);
+
+int generateReducedOrthogonalQopJ(
+    const vector<vector<pair<int, int>>>& basesJ,
+    const Eigen::MatrixXd& QopJ00,
+    const Eigen::MatrixXd& QopJ01,
+    const Eigen::MatrixXd& orthogonalBasis,
+    const int t,
+    Eigen::MatrixXd& reducedJMatrix);
+
+double JfQtJi(const vector<int>& bra, const vector<int>& ket, // 0 Pi, 1 Nu, 2 J, 3 M
+    const vector<vector<pair<int, int>>>& basesJP,
+    const vector<vector<pair<int, int>>>& basesJN,
+    const int t,
+    const int PiNu, // 0 Pi, 1 Nu
+    const Eigen::MatrixXd& ReducedQopJP,
+    const Eigen::MatrixXd& ReducedQopJN);
+
+double calTfi(const vector<vector<pair<int, int>>>& basesJP,
+    const vector<vector<pair<int, int>>>& basesJN,
+    const vector<vector<int>>& braBasesJPN,
+    const vector<vector<int>>& ketBasesJPN,
+    const int t,
+    const State& initial,
+    const State& final,
+    const double ePi,
+    const double eNu,
+    const Eigen::MatrixXd& ReducedQopJP,
+    const Eigen::MatrixXd& ReducedQopJN);
+
+double calculateBE2(const vector<vector<pair<int, int>>>& basesJP,
+    const vector<vector<pair<int, int>>>& basesJN,
+    const vector<vector<int>>& braBasesJPN,
+    const vector<vector<int>>& ketBasesJPN,
+    const int t,
+    const State& initial,
+    const State& final,
+    const double ePi,
+    const double eNu,
+    const Eigen::MatrixXd& reducedQopJP,
+    const Eigen::MatrixXd& reducedQopJN);
+
+
+int generateMj1j2J(const vector<Orbit*>& orbits,
+    const int t,
+    const double alpha,
+    const double gs,
+    const double gl,
+    const double mun,
+    Eigen::MatrixXd& mj1j2J);
+
+double calMfi(const vector<vector<pair<int, int>>>& basesJP,
+    const vector<vector<pair<int, int>>>& basesJN,
+    const vector<vector<int>>& braBasesJPN,
+    const vector<vector<int>>& ketBasesJPN,
+    const int t,
+    const State& initial,
+    const State& final,
+    const Eigen::MatrixXd& ReducedMopJP,
+    const Eigen::MatrixXd& ReducedMopJN);
+
+double calculateBM1(const vector<vector<pair<int, int>>>& basesJP,
+    const vector<vector<pair<int, int>>>& basesJN,
+    const vector<vector<int>>& braBasesJPN,
+    const vector<vector<int>>& ketBasesJPN,
+    const int t,
+    const State& initial,
+    const State& final,
+    const Eigen::MatrixXd& reducedQopJP,
+    const Eigen::MatrixXd& reducedQopJN);
 
 
 #endif //INC_1_NPA_H

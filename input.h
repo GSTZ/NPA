@@ -10,11 +10,18 @@
 #include <vector>
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
+#include <omp.h>
 using namespace std;
 
 enum class Parity {
     Positive,
     Negative
+};
+
+
+enum class OddEven {
+    Odd,
+    Even
 };
 
 
@@ -97,6 +104,12 @@ struct TBMEJHash {
         // 经典的哈希组合方式，避免对称值（如 a=1,b=2 和 a=2,b=1）哈希冲突
         return h1 ^ (h2 << 1) ^ (h3 << 2) ^ (h4 << 3);
     }
+};
+
+struct State {
+    int J;
+    double energy;
+    vector<double> waveFunction;
 };
 
 int readSps(const string& filename, int& orbitProtonNumber, int& orbitNeutronNumber,
