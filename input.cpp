@@ -49,11 +49,10 @@ int readSps(const string& filename, int& orbitProtonNumber, int& orbitNeutronNum
 
 int readInput(int& Z, int& N, string& spsFile, string& pairFile, string& scFileP, string& scFileN,
     int& interactionNumber,
-    vector<InteractionFile*>& interactionFiles) {
+    vector<InteractionFile*>& interactionFiles, vector<int>& Js) {
 
     ifstream infile("shell.dat");
     if (infile.is_open()) {
-        int i;
         string line, tem;
 
         getline(infile, line);
@@ -91,7 +90,7 @@ int readInput(int& Z, int& N, string& spsFile, string& pairFile, string& scFileP
         iss.clear();
 
 
-        for (i = 0; i < interactionNumber; i++) {
+        for (int i = 0; i < interactionNumber; i++) {
             string filename, core, A, scale;
             getline(infile, line);
             if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -101,6 +100,16 @@ int readInput(int& Z, int& N, string& spsFile, string& pairFile, string& scFileP
             interactionFiles.push_back(infi);
             iss.clear();
         }
+
+        string tem2, gap;
+        getline(infile, line);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        iss.str(line);
+        iss >> tem >> tem2 >> gap;
+        for (int i = stoi(tem); i < stoi(tem2) + 1; i += stoi(gap)) {
+            Js.push_back(i);
+        }
+        iss.clear();
     }
 
     return 0;

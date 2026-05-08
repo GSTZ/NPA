@@ -8,6 +8,138 @@
 #include <ranges>
 #include <set>
 
+using SpMat = Eigen::SparseMatrix<double, Eigen::RowMajor>;
+using ProductType = Eigen::Product<SpMat, SpMat, Eigen::AliasFreeProduct>;
+
+struct IdxVal {
+    int idx;
+    double val;
+};
+
+struct SparseAccess {
+    std::vector<std::vector<IdxVal>> rows; // rows[r] = (col, value)
+    std::vector<std::vector<IdxVal>> cols; // cols[c] = (row, value)
+};
+
+static SparseAccess buildSparseAccessRM(const SpMat& M, int n) {
+    SparseAccess acc;
+    acc.rows.resize(n);
+    acc.cols.resize(n);
+
+    for (int outer = 0; outer < M.outerSize(); ++outer) {
+        for (SpMat::InnerIterator it(M, outer); it; ++it) {
+            const int row = static_cast<int>(it.row());
+            const int col = static_cast<int>(it.col());
+            const double val = it.value();
+
+            acc.rows[row].push_back({col, val});
+            acc.cols[col].push_back({row, val});
+        }
+    }
+
+    return acc;
+}
+
+
+static void addScaledKronSparseToDense(
+    Eigen::MatrixXd& G,
+    const SpMat& A,
+    const SpMat& B,
+    int n,
+    double scale
+) {
+    for (int ar = 0; ar < A.outerSize(); ++ar) {
+        for (SpMat::InnerIterator ait(A, ar); ait; ++ait) {
+            const int alpha = static_cast<int>(ait.row());
+            const int beta  = static_cast<int>(ait.col());
+            const double av = ait.value();
+
+            if (std::abs(av) < 1e-12) {
+                continue;
+            }
+
+            for (int br = 0; br < B.outerSize(); ++br) {
+                for (SpMat::InnerIterator bit(B, br); bit; ++bit) {
+                    const int gamma = static_cast<int>(bit.row());
+                    const int delta = static_cast<int>(bit.col());
+                    const double bv = bit.value();
+
+                    if (std::abs(bv) < 1e-12) {
+                        continue;
+                    }
+
+                    G(alpha * n + gamma, beta * n + delta) += scale * av * bv;
+                }
+            }
+        }
+    }
+}
+
+
+static void addQbarContractToDense(
+    Eigen::MatrixXd& G,
+    const SpMat& qbar,
+    const SparseAccess& PkAcc,
+    const SparseAccess& PiAcc,
+    int n,
+    double scale
+) {
+    for (int qrow = 0; qrow < qbar.outerSize(); ++qrow) {
+        const int alpha = qrow / n;
+        const int gamma = qrow % n;
+
+        for (SpMat::InnerIterator it(qbar, qrow); it; ++it) {
+            const int qcol = static_cast<int>(it.col());
+
+            const int beta  = qcol / n;
+            const int delta = qcol % n;
+            const double qv = it.value();
+
+            if (std::abs(qv) < 1e-15) {
+                continue;
+            }
+
+            // 第一项：Pk * qbarAB * Pi
+            //
+            // G(x*n + gamma, y*n + delta) +=
+            //     scale * Pk(x, alpha) * qbar(alpha,gamma; beta,delta) * Pi(beta, y)
+
+            const auto& leftPk  = PkAcc.cols[alpha]; // Pk(x, alpha)
+            const auto& rightPi = PiAcc.rows[beta];  // Pi(beta, y)
+
+            for (const auto& lx : leftPk) {
+                const int x = lx.idx;
+                const double pkVal = lx.val;
+
+                for (const auto& ry : rightPi) {
+                    const int y = ry.idx;
+                    const double piVal = ry.val;
+
+                    G(x * n + gamma, y * n + delta) += scale * pkVal * qv * piVal;
+                }
+            }
+
+            // 第二项：Pi * qbarAB * Pk
+
+            const auto& leftPi  = PiAcc.cols[alpha]; // Pi(x, alpha)
+            const auto& rightPk = PkAcc.rows[beta];  // Pk(beta, y)
+
+            for (const auto& lx : leftPi) {
+                const int x = lx.idx;
+                const double piVal = lx.val;
+
+                for (const auto& ry : rightPk) {
+                    const int y = ry.idx;
+                    const double pkVal = ry.val;
+
+                    G(x * n + gamma, y * n + delta) += scale * piVal * qv * pkVal;
+                }
+            }
+        }
+    }
+}
+
+
 template <typename T>
 int kroneckerDelta(const T& a, const T& b) {
     return a == b ? 1 : 0;
@@ -20,6 +152,23 @@ T sparseTrace(const Eigen::SparseMatrix<T, Options>& mat) {
         trace += mat.coeff(i, i);
     }
     return trace;
+}
+
+
+double sparseTraceProduct(const SpMat& A, const SpMat& B) {
+    double tr = 0.0;
+
+    // trace(A * B) = sum_i sum_j A(i,j) * B(j,i)
+    for (int i = 0; i < A.outerSize(); ++i) {
+        for (SpMat::InnerIterator it(A, i); it; ++it) {
+            const int row = static_cast<int>(it.row());
+            const int col = static_cast<int>(it.col());
+
+            tr += it.value() * B.coeff(col, row);
+        }
+    }
+
+    return tr;
 }
 
 
@@ -75,22 +224,78 @@ void permuteWithSTL(vector<int>& nums, vector<vector<int>>& permutations) {
 }
 
 
+int generateA0s(const vector<Orbit*>& orbits, vector<A0*>& A0s) {
+    int count = 0;
+    for (auto os : orbits) {
+        Eigen::VectorXd yr0;
+        yr0.resize(orbits.size());
+        yr0.setZero();
+        yr0(count) = 1;
+        A0* tem = new A0(OddEven::Odd, count, os->j,
+        os->l % 2 == 0 ? Parity::Positive : Parity::Negative, yr0);
+        A0s.push_back(tem);
+        count++;
+    }
+    return 0;
+}
 
-int generateBasis(const vector<Pair*>& pairs, const int& pairNumber, const vector<int>& basis,
-    vector<vector<int>>& bases, const vector<PairLimit*>& limits) {
-    if (basis.size() == pairNumber) {
+
+int generateP0s(const vector<A0*>& A0s, vector<P0*>& P0s) {
+    int total = 0;
+    for (auto a0 : A0s) {
+        for (int m = -a0->j; m <= a0->j; m += 2) {
+            total++;
+        }
+    }
+
+    int count = 0;
+    for (auto a0 : A0s) {
+        for (int m = -a0->j; m <= a0->j; m += 2) {
+            Eigen::VectorXd sa;
+            sa.resize(total);
+            sa.setZero();
+            sa(count) = 1;
+            P0* tem = new P0(OddEven::Odd, count, a0->index, a0->j, m, a0->parity, sa);
+            P0s.push_back(tem);
+            count++;
+        }
+    }
+    return 0;
+}
+
+
+int generateBasis(const vector<Pair*>& pairs,
+    const int& pairNumber,
+    const int orbitNumberJ,
+    const bool isOdd,
+    const vector<int>& basis,
+    vector<vector<int>>& bases,
+    const vector<PairLimit*>& limits) {
+    if (basis.size() == pairNumber + 1) {
         if (judgeBasis(limits, basis)) {
             bases.push_back(basis);
+        }
+    } else if (basis.size() == 0) {
+        if (isOdd) {
+            for (int i = 0; i < orbitNumberJ; i++) {
+                vector<int> basisNext = basis;
+                basisNext.push_back(i); // means seniority 0
+                generateBasis(pairs, pairNumber, orbitNumberJ, isOdd, basisNext, bases, limits);
+            }
+        } else {
+            vector<int> basisNext = basis;
+            basisNext.push_back(-1); // means seniority 0
+            generateBasis(pairs, pairNumber, orbitNumberJ, isOdd, basisNext, bases, limits);
         }
     } else {
         int last, pairTypes, i;
         pairTypes = pairs.size();
-        if (basis.empty()) last = 0;
-        else last = basis.back();
+        last = basis.back();
+        if (basis.size() == 1) last = 0;
         for (i = last; i < pairTypes; i++) {
             vector<int> basisNext = basis;
             basisNext.push_back(i);
-            generateBasis(pairs, pairNumber, basisNext, bases, limits);
+            generateBasis(pairs, pairNumber, orbitNumberJ, isOdd, basisNext, bases, limits);
         }
     }
     return 0;
@@ -102,7 +307,7 @@ bool judgeBasis(const vector<PairLimit*>& limits, const vector<int>& basis) {
     for (const auto& limit : limits) {
         int count = 0;
         for (const auto& index : limit->indexes) {
-            count += std::count(basis.begin(), basis.end(), index);
+            count += std::count(basis.begin() + 1, basis.end(), index);
         }
         if (count < limit->limitMin || count > limit->limitMax) {
             flag = false;
@@ -112,20 +317,29 @@ bool judgeBasis(const vector<PairLimit*>& limits, const vector<int>& basis) {
 }
 
 
-int generateJi(const vector<Pair*>& pairs, const vector<vector<int>>& bases, vector<vector<vector<int>>>& JisList) {
+int generateJi(const vector<Pair*>& pairs,
+    const vector<A0*>& A0s,
+    const vector<vector<int>>& bases,
+    vector<vector<vector<int>>>& JisList) {
     for (int i = 0; i < bases.size(); i++) {
-        auto basis = bases[i];
+        const auto& basis = bases[i];
         vector<vector<int>> jisList;
         vector<int> jis;
-        jis.push_back(pairs[basis[0]]->j);
-        generateJiForOne(pairs, basis, jis, static_cast<int>(basis.size()), jisList);
+        if (basis[0] == -1) {
+            jis.push_back(0);
+        } else {
+            jis.push_back(A0s[basis[0]]->j);
+        }
+        //jis.push_back(pairs[basis[0]]->j);
+        generateJiForOne(pairs, basis, jis, basis.size() - 1, jisList);
         JisList.push_back(jisList);
     }
     return 0;
 }
 
 
-int generateBasesJ(const vector<vector<vector<int>>>& JisList, const vector<vector<int>>& bases,
+int generateBasesJ(const vector<vector<vector<int>>>& JisList,
+    const vector<vector<int>>& bases,
     vector<vector<pair<int, int>>>& basesJ) {
     set<int> Js;
     for (const auto& jis : JisList) {
@@ -151,9 +365,12 @@ int generateBasesJ(const vector<vector<vector<int>>>& JisList, const vector<vect
 }
 
 
-int generateJiForOne(const vector<Pair*>& pairs, const vector<int>& basis, const vector<int>& jis, const int& pairNumber,
+int generateJiForOne(const vector<Pair*>& pairs,
+    const vector<int>& basis,
+    const vector<int>& jis,
+    const int& pairNumber,
     vector<vector<int>>& jisList) {
-    if (jis.size() == pairNumber) {
+    if (jis.size() == pairNumber + 1) {
         jisList.push_back(jis);
     } else {
         auto pairNext = pairs[basis[jis.size()]];
@@ -235,6 +452,7 @@ int initializePairM(const vector<Pair*>& pairs, const vector<Orbit*>& orbits,
                     }
                 }
             }
+            pab.makeCompressed();
             auto pm = new PairM(index, pair->index, pair->j, i, pair->parity, pab);
             ms.push_back(index);
             pairMs.push_back(pm);
@@ -245,49 +463,97 @@ int initializePairM(const vector<Pair*>& pairs, const vector<Orbit*>& orbits,
     return 0;
 }
 
-int generateMBases(const vector<Pair*>& pairs, const vector<PairM*>& pairMs, const int& pairNumber,
-    const vector<vector<int>>& bases, const vector<vector<int>>& pairJMMap, vector<vector<int>>& basesM0,
+int generateMBases(const vector<Pair*>& pairs,
+    const vector<PairM*>& pairMs,
+    const int& pairNumber,
+    const vector<A0*>& A0s,
+    const vector<P0*>& P0s,
+    const vector<vector<int>>& bases,
+    const vector<vector<int>>& pairJMMap,
+    vector<vector<int>>& basesM0,
     vector<vector<int>>& basesM1) {
-    for (const auto& basis : bases) {
-        vector<int> basisM;
-        generateMBasis(pairs, pairMs, pairNumber, basis, basisM, pairJMMap, basesM0, basesM1);
-    }
-    return 0;
-}
-
-int generateMBasis(const vector<Pair*>& pairs, const vector<PairM*>& pairMs, const int& pairNumber,
-    const vector<int>& basis, const vector<int>& basisM, const vector<vector<int>>& pairJMMap,
-    vector<vector<int>>& basesM0, vector<vector<int>>& basesM1) {
-    int index = basisM.size();
-    if (index == pairNumber) {
-        auto M = judgeMBasis(pairMs, basisM);
-        if (M == 0) basesM0.push_back(basisM);
-        else if (M == 2) basesM1.push_back(basisM);
-    } else {
-        auto pair = pairs[basis[index]];
-        for (const auto pmIndex : pairJMMap[pair->index]) {
-            auto pairM = pairMs[pmIndex];
-            vector<int> basisMNext = basisM;
-            basisMNext.push_back(pairM->index);
-            generateMBasis(pairs, pairMs, pairNumber, basis, basisMNext, pairJMMap, basesM0, basesM1);
+    if (bases[0][0] == -1) {
+        for (const auto& basis : bases) {
+            vector<int> basisM;
+            basisM.push_back(-1);
+            generateMBasis(pairs, pairMs, pairNumber, false, A0s, P0s, basis, basisM, pairJMMap, basesM0, basesM1);
         }
-        /*for (int i = 0; i < pairMs.size(); i++) {
-            PairM pairM = pairMs[i];
-            if (ranges::contains(pairJMMap[pair.index], pairM.index)) {
-                vector<int> basisMNext = basisM;
-                basisMNext.push_back(pairM.index);
-                generateMBasis(pairs, pairMs, pairNumber, basis, basisMNext, pairJMMap, basesM);
+    } else {
+        for (const auto& basis : bases) {
+            vector<int> basisM;
+            generateMBasis(pairs, pairMs, pairNumber, true, A0s, P0s, basis, basisM, pairJMMap, basesM0, basesM1);
+        }
+    }
+    return 0;
+}
+
+int generateMBasis(const vector<Pair*>& pairs,
+    const vector<PairM*>& pairMs,
+    const int& pairNumber,
+    const bool isOdd,
+    const vector<A0*>& A0s,
+    const vector<P0*>& P0s,
+    const vector<int>& basisJ,
+    const vector<int>& basisM,
+    const vector<vector<int>>& pairJMMap,
+    vector<vector<int>>& basesM0,
+    vector<vector<int>>& basesM1) {
+
+    if (isOdd) {
+        int index = basisM.size();
+        if (index == 0) {
+            auto a0 = A0s[basisJ[0]];
+            for (const auto& p0 : P0s) {
+                if (p0->indexJ == a0->index) {
+                    vector<int> basisMNext = basisM;
+                    basisMNext.push_back(p0->index);
+                    generateMBasis(pairs, pairMs, pairNumber, isOdd, A0s, P0s, basisJ, basisMNext, pairJMMap, basesM0, basesM1);
+                }
             }
-        }*/
+        } else {
+            if (index == pairNumber + 1) {
+                const int initialNumer = P0s[basisM[0]]->m;
+                auto M = judgeMBasis(pairMs, basisM, initialNumer);
+                if (M == 1) basesM0.push_back(basisM);
+            } else {
+                auto pair = pairs[basisJ[index]];
+                for (const auto pmIndex : pairJMMap[pair->index]) {
+                    auto pairM = pairMs[pmIndex];
+                    vector<int> basisMNext = basisM;
+                    basisMNext.push_back(pairM->index);
+                    generateMBasis(pairs, pairMs, pairNumber, isOdd, A0s, P0s, basisJ, basisMNext, pairJMMap, basesM0, basesM1);
+                }
+            }
+        }
+    } else {
+        int index = basisM.size();
+        if (index == pairNumber + 1) {
+            auto M = judgeMBasis(pairMs, basisM, 0);
+            if (M == 0) basesM0.push_back(basisM);
+            else if (M == 2) basesM1.push_back(basisM);
+        } else {
+            auto pair = pairs[basisJ[index]];
+            for (const auto pmIndex : pairJMMap[pair->index]) {
+                auto pairM = pairMs[pmIndex];
+                vector<int> basisMNext = basisM;
+                basisMNext.push_back(pairM->index);
+                generateMBasis(pairs, pairMs, pairNumber, isOdd, A0s, P0s, basisJ, basisMNext, pairJMMap, basesM0, basesM1);
+            }
+        }
     }
     return 0;
 }
 
 
-int judgeMBasis(const vector<PairM*>& pairMs, const vector<int>& basisM) {
-    int M = 0;
+int judgeMBasis(const vector<PairM*>& pairMs, const vector<int>& basisM, const int initialNumber) {
+    int M = initialNumber;
     vector<int> order;
+    int count = 0;
     for (const auto& bmi : basisM) {
+        if (count == 0) {  // ignore the first one
+            count = 1;
+            continue;
+        }
         M += pairMs[bmi]->m;
         order.push_back(pairMs[bmi]->index);
     }
@@ -302,6 +568,8 @@ int judgeMBasis(const vector<PairM*>& pairMs, const vector<int>& basisM) {
 
 int overlapMScheme(const std::vector<PairM*>& pairMs,
                    const std::vector<std::vector<int>>& basesM,
+                   const bool isOdd,
+                   const vector<P0*>& P0s,
                    const int orbitNumber,
                    Eigen::MatrixXd& overlapMap) {
     const int dim = static_cast<int>(basesM.size());
@@ -329,7 +597,7 @@ int overlapMScheme(const std::vector<PairM*>& pairMs,
         const auto& basisMBra = basesM[i];
         const auto& basisMKet = basesM[j];
 
-        double overlap = overlapMSchemeOne(pairMs, basisMBra, basisMKet, orbitNumber);
+        double overlap = overlapMSchemeOne(pairMs, basisMBra, basisMKet, isOdd, P0s, orbitNumber);
 
         overlapMap(i, j) = overlap;
         if (i != j) {
@@ -341,19 +609,31 @@ int overlapMScheme(const std::vector<PairM*>& pairMs,
 }
 
 double overlapMSchemeOne(const vector<PairM*>& pairMs, const vector<int>& basisMBra,
-    const vector<int>& basisMKet, const int orbitNumber) {
+    const vector<int>& basisMKet,
+    const bool isOdd,
+    const vector<P0*>& P0s,
+    const int orbitNumber) {
     double overlap = 0.0;
     vector<Eigen::Product<Eigen::SparseMatrix<double, Eigen::RowMajor>, Eigen::SparseMatrix<double, Eigen::RowMajor>,
     Eigen::AliasFreeProduct>> resultQ;
     vector<PairNew*> bra, ket;
+
+    auto p0newBra = new PairNew();
+    if (isOdd) p0newBra->sa = P0s[basisMBra[0]]->sa;
+    else bra.push_back(p0newBra);
+
+    auto p0newKet = new PairNew();
+    if (isOdd) p0newKet->sa = P0s[basisMKet[0]]->sa;
+    ket.push_back(p0newKet);
+
     // bra and ket have the same length.
-    for (int i = 0; i < basisMBra.size() - 1; i++) {
+    for (int i = 1; i < basisMBra.size() - 1; i++) {
         auto pNewBra = new PairNew();
         pNewBra->pab = pairMs[basisMBra[i]]->pab;
         bra.push_back(pNewBra);
     }
 
-    for (int i = 0; i < basisMKet.size(); i++) {
+    for (int i = 1; i < basisMKet.size(); i++) {
         auto pNewKet = new PairNew();
         pNewKet->pab = pairMs[basisMKet[i]]->pab;
         ket.push_back(pNewKet);
@@ -362,7 +642,11 @@ double overlapMSchemeOne(const vector<PairM*>& pairMs, const vector<int>& basisM
     Eigen::SparseMatrix<double, Eigen::RowMajor> qbar;
     Eigen::SparseMatrix<double, Eigen::RowMajor> Bab(orbitNumber, orbitNumber);
 
-    N1Bab(bra, ket, orbitNumber, qbar, Bab);
+    if (!isOdd) N1Bab(bra, ket, orbitNumber, qbar, Bab);
+    else {
+        auto syPrime = P0s[basisMBra[0]]->sa;
+        BabByTaby(bra, ket, syPrime, orbitNumber, Bab);
+    }
 
     Eigen::SparseMatrix<double, Eigen::RowMajor> pnBn = pairMs[basisMBra.back()]->pab * Bab;
     overlap = -2 * sparseTrace(pnBn);
@@ -371,14 +655,90 @@ double overlapMSchemeOne(const vector<PairM*>& pairMs, const vector<int>& basisM
 }
 
 
-int N2Qaby6(const vector<PairNew*>& bra, const vector<PairNew*>& ket, const int orbitNumber,
+int BabByTaby(const vector<PairNew*>& bra,
+    const vector<PairNew*>& ket,
+    const Eigen::VectorXd& syPrime,
+    const int orbitNumber,
+    Eigen::SparseMatrix<double, Eigen::RowMajor>& Bab) {
+
+    vector<Eigen::MatrixXd> tbar;
+    taby(bra, ket, orbitNumber, tbar);
+
+    for (int i = 0; i < orbitNumber; i++) {
+        for (int j = 0; j < orbitNumber; j++) {
+            for (int k = 0; k < orbitNumber; k++) {
+                Bab.coeffRef(i, j) += 3 * syPrime(k) * tbar[i](j, k);
+            }
+        }
+    }
+
+    return 0;
+
+}
+
+
+int taby(const vector<PairNew*>& bra,
+    const vector<PairNew*>& ket,
+    const int orbitNumber,
+    vector<Eigen::MatrixXd>& tbar) {
+
+    vector<pair<Eigen::VectorXd, Eigen::SparseMatrix<double, Eigen::RowMajor>>> resultAP;
+
+    generalMultiCommutator110(bra, ket, resultAP);
+
+    vector<Eigen::MatrixXd> taby;
+    for (int i = 0; i < orbitNumber; i++) {
+        Eigen::MatrixXd by;
+        by.resize(orbitNumber, orbitNumber);
+        by.setZero();
+        taby.push_back(by);
+
+        Eigen::MatrixXd by2;
+        by2.resize(orbitNumber, orbitNumber);
+        by2.setZero();
+        tbar.push_back(by2);
+    }
+
+    for (int m = 0; m < resultAP.size(); m++) {
+        auto sa = resultAP[m].first;
+        auto pby = resultAP[m].second;
+        for (int i = 0; i < orbitNumber; i++) {
+            for (int j = 0; j < orbitNumber; j++) {
+                for (int k = 0; k < orbitNumber; k++) {
+                    taby[i](j, k) += sa(i) * pby.coeff(j, k);
+                }
+            }
+        }
+    }
+
+
+    for (int a = 0; a < orbitNumber; ++a) {
+        for (int beta = 0; beta < orbitNumber; ++beta) {
+            for (int gamma = 0; gamma < orbitNumber; ++gamma) {
+                tbar[a](beta, gamma) =
+                    (1.0 / 3.0) *
+                    (
+                        taby[a](beta, gamma)
+                        - taby[beta](a, gamma)
+                        + taby[gamma](a, beta)
+                    );
+            }
+        }
+    }
+
+    return 0;
+
+}
+
+
+int N2Qaby6(const vector<PairNew*>& bra,
+    const vector<PairNew*>& ket,
+    const int orbitNumber,
     Eigen::SparseMatrix<double, Eigen::RowMajor>& qbar) {
 
-    vector<Eigen::Product<Eigen::SparseMatrix<double, Eigen::RowMajor>, Eigen::SparseMatrix<double, Eigen::RowMajor>,
-    Eigen::AliasFreeProduct>> resultQ;
+    std::vector<ProductType> resultQ;
 
-    generalMultiCommutator(bra, ket, resultQ);
-
+    generalMultiCommutator20(bra, ket, resultQ);
 
     const int n = orbitNumber;
     const int qSize = static_cast<int>(resultQ.size());
@@ -386,6 +746,187 @@ int N2Qaby6(const vector<PairNew*>& bra, const vector<PairNew*>& ket, const int 
     const double one_sixth = 1.0 / 6.0;
 
     qbar.resize(dim, dim);
+    qbar.setZero();
+
+    if (n < 4 || qSize == 0) {
+        qbar.makeCompressed();
+        return 0;
+    }
+
+    // 注意：这个 pack 假设 orbitNumber <= 65535
+    auto pack4 = [](int a, int b, int c, int d) -> std::uint64_t {
+        return (static_cast<std::uint64_t>(a) << 48)
+             | (static_cast<std::uint64_t>(b) << 32)
+             | (static_cast<std::uint64_t>(c) << 16)
+             |  static_cast<std::uint64_t>(d);
+    };
+
+    auto unpack4 = [](std::uint64_t key, int& a, int& b, int& c, int& d) {
+        a = static_cast<int>((key >> 48) & 0xFFFF);
+        b = static_cast<int>((key >> 32) & 0xFFFF);
+        c = static_cast<int>((key >> 16) & 0xFFFF);
+        d = static_cast<int>( key        & 0xFFFF);
+    };
+
+    struct PairNZ {
+        int x;
+        int y;
+        double val;
+    };
+
+    auto collectUpperNonZeros = [](const SpMat& M) {
+        std::vector<PairNZ> list;
+        list.reserve(M.nonZeros());
+
+        for (int outer = 0; outer < M.outerSize(); ++outer) {
+            for (SpMat::InnerIterator it(M, outer); it; ++it) {
+                const int i = static_cast<int>(it.row());
+                const int j = static_cast<int>(it.col());
+
+                // 与原代码一致：只用 a < b 的上三角项
+                if (i < j) {
+                    list.push_back({i, j, it.value()});
+                }
+            }
+        }
+
+        return list;
+    };
+
+    auto getPairSign = [](int mask) -> int {
+        // 排序后的四元组位置为 0,1,2,3
+        //
+        // L 取的位置：
+        // 0,1 -> + L_ab R_cd
+        // 0,2 -> - L_ac R_bd
+        // 0,3 -> + L_ad R_bc
+        // 1,2 -> + L_bc R_ad
+        // 1,3 -> - L_bd R_ac
+        // 2,3 -> + L_cd R_ab
+
+        switch (mask) {
+        case 0b0011: // 0,1
+        case 0b1001: // 0,3
+        case 0b0110: // 1,2
+        case 0b1100: // 2,3
+            return +1;
+
+        case 0b0101: // 0,2
+        case 0b1010: // 1,3
+            return -1;
+
+        default:
+            return 0;
+        }
+    };
+
+    // 预先收集所有 resultQ[m] 的 L/R 上三角非零元
+    std::vector<std::vector<PairNZ>> Lpairs(qSize);
+    std::vector<std::vector<PairNZ>> Rpairs(qSize);
+
+    for (int m = 0; m < qSize; ++m) {
+        const SpMat& L = resultQ[m].lhs();
+        const SpMat& R = resultQ[m].rhs();
+
+        Lpairs[m] = collectUpperNonZeros(L);
+        Rpairs[m] = collectUpperNonZeros(R);
+    }
+
+    int numThreads = 1;
+
+#ifdef _OPENMP
+    numThreads = omp_get_max_threads();
+#endif
+
+    // 每个线程一个 unordered_map，避免加锁
+    std::vector<std::unordered_map<std::uint64_t, double>> localMaps(numThreads);
+
+    const long long numUnique =
+        1LL * n * (n - 1) * (n - 2) * (n - 3) / 24;
+
+    for (int t = 0; t < numThreads; ++t) {
+        localMaps[t].reserve(
+            static_cast<size_t>(numUnique / numThreads + 1024)
+        );
+    }
+
+#pragma omp parallel
+    {
+        int tid = 0;
+
+#ifdef _OPENMP
+        tid = omp_get_thread_num();
+#endif
+
+        auto& localMap = localMaps[tid];
+
+        for (int m = 0; m < qSize; ++m) {
+            const auto& Llist = Lpairs[m];
+            const auto& Rlist = Rpairs[m];
+
+#pragma omp for schedule(dynamic)
+            for (int li = 0; li < static_cast<int>(Llist.size()); ++li) {
+                const auto& lp = Llist[li];
+
+                const int lx = lp.x;
+                const int ly = lp.y;
+                const double lv = lp.val;
+
+                for (const auto& rp : Rlist) {
+                    const int rx = rp.x;
+                    const int ry = rp.y;
+
+                    // 四个指标必须互不相同
+                    if (lx == rx || lx == ry || ly == rx || ly == ry) {
+                        continue;
+                    }
+
+                    std::array<int, 4> idx = {lx, ly, rx, ry};
+                    std::sort(idx.begin(), idx.end());
+
+                    const int a = idx[0];
+                    const int b = idx[1];
+                    const int c = idx[2];
+                    const int d = idx[3];
+
+                    int posX = -1;
+                    int posY = -1;
+
+                    for (int p = 0; p < 4; ++p) {
+                        if (idx[p] == lx) {
+                            posX = p;
+                        } else if (idx[p] == ly) {
+                            posY = p;
+                        }
+                    }
+
+                    const int mask = (1 << posX) | (1 << posY);
+                    const int sgn = getPairSign(mask);
+
+                    if (sgn == 0) {
+                        continue;
+                    }
+
+                    const double contrib = one_sixth * sgn * lv * rp.val;
+
+                    if (contrib != 0.0) {
+                        const std::uint64_t key = pack4(a, b, c, d);
+                        localMap[key] += contrib;
+                    }
+                }
+            }
+        }
+    }
+
+    // 合并每个线程的 map
+    std::unordered_map<std::uint64_t, double> quadValue;
+    quadValue.reserve(static_cast<size_t>(numUnique));
+
+    for (auto& mp : localMaps) {
+        for (auto& kv : mp) {
+            quadValue[kv.first] += kv.second;
+        }
+    }
 
     // 24 个排列，以及对应奇偶性
     static const int perm[24][4] = {
@@ -402,117 +943,47 @@ int N2Qaby6(const vector<PairNew*>& bra, const vector<PairNew*>& ket, const int 
         +1,-1,-1,+1,+1,-1,-1,+1,+1,-1,-1,+1
     };
 
-    // 预缓存 lhs/rhs 指针，避免反复 resultQ[m].lhs()/rhs()
-    std::vector<const Eigen::SparseMatrix<double>*> Ls(qSize);
-    std::vector<const Eigen::SparseMatrix<double>*> Rs(qSize);
-    for (int m = 0; m < qSize; ++m) {
-        Ls[m] = std::vector<const Eigen::SparseMatrix<double> *>::value_type(&resultQ[m].lhs());
-        Rs[m] = std::vector<const Eigen::SparseMatrix<double> *>::value_type(&resultQ[m].rhs());
-    }
+    std::vector<Eigen::Triplet<double>> triplets;
+    triplets.reserve(quadValue.size() * 24);
 
-    // 每个线程一个 triplet 容器，避免锁竞争
-    int numThreads = 1;
-    #ifdef _OPENMP
-    numThreads = omp_get_max_threads();
-    #endif
+    for (const auto& kv : quadValue) {
+        const double value = kv.second;
 
-    std::vector<std::vector<Eigen::Triplet<double>>> tripletsPerThread(numThreads);
+        if (std::abs(value) < 1e-14) {
+            continue;
+        }
 
-    // 粗略预留一下空间：
-    // 每个独立四元组最多产生 24 个非零
-    // 独立四元组数量是 C(n,4)
-    const long long numUnique =
-        (n >= 4) ? (1LL * n * (n - 1) * (n - 2) * (n - 3) / 24) : 0LL;
+        int a, b, c, d;
+        unpack4(kv.first, a, b, c, d);
 
-    for (int t = 0; t < numThreads; ++t) {
-        tripletsPerThread[t].reserve(static_cast<size_t>(numUnique * 24 / numThreads + 1024));
-    }
+        const int base[4] = {a, b, c, d};
 
-    std::vector<std::array<int, 4>> combos;
-    combos.reserve((n >= 4) ? (1LL * n * (n - 1) * (n - 2) * (n - 3) / 24) : 0);
+        for (int p = 0; p < 24; ++p) {
+            const int i = base[perm[p][0]];
+            const int j = base[perm[p][1]];
+            const int k = base[perm[p][2]];
+            const int l = base[perm[p][3]];
 
-    for (int a = 0; a < n; ++a) {
-        for (int b = a + 1; b < n; ++b) {
-            for (int c = b + 1; c < n; ++c) {
-                for (int d = c + 1; d < n; ++d) {
-                    combos.push_back({a, b, c, d});
-                }
-            }
+            const int row = i * n + k;
+            const int col = j * n + l;
+
+            triplets.emplace_back(row, col, sign[p] * value);
         }
     }
 
-    #pragma omp parallel
-    {
-        int tid = 0;
-        #ifdef _OPENMP
-        tid = omp_get_thread_num();
-        #endif
-
-        auto& localTriplets = tripletsPerThread[tid];
-
-        #pragma omp for schedule(dynamic)
-        for (int idx = 0; idx < static_cast<int>(combos.size()); ++idx) {
-            const int a = combos[idx][0];
-            const int b = combos[idx][1];
-            const int c = combos[idx][2];
-            const int d = combos[idx][3];
-
-            double value = 0.0;
-
-            for (int m = 0; m < qSize; ++m) {
-                const auto& L = *Ls[m];
-                const auto& R = *Rs[m];
-
-                const double qabcd = L.coeff(a, b) * R.coeff(c, d);
-                const double qacbd = L.coeff(a, c) * R.coeff(b, d);
-                const double qadbc = L.coeff(a, d) * R.coeff(b, c);
-                const double qbcad = L.coeff(b, c) * R.coeff(a, d);
-                const double qbdac = L.coeff(b, d) * R.coeff(a, c);
-                const double qcdab = L.coeff(c, d) * R.coeff(a, b);
-
-                value += (qabcd - qacbd + qadbc + qbcad - qbdac + qcdab) / 6.0;
-            }
-
-            if (std::abs(value) < 1e-11) {
-                continue;
-            }
-
-            const int base[4] = {a, b, c, d};
-
-            for (int p = 0; p < 24; ++p) {
-                const int i = base[perm[p][0]];
-                const int j = base[perm[p][1]];
-                const int k = base[perm[p][2]];
-                const int l = base[perm[p][3]];
-
-                const int row = i * n + k;
-                const int col = j * n + l;
-
-                localTriplets.emplace_back(row, col, sign[p] * value);
-            }
+    qbar.setFromTriplets(
+        triplets.begin(),
+        triplets.end(),
+        [](const double& x, const double& y) {
+            return x + y;
         }
-    }
-
-    // 合并 triplets
-    std::vector<Eigen::Triplet<double>> allTriplets;
-    size_t totalSize = 0;
-    for (const auto& v : tripletsPerThread) {
-        totalSize += v.size();
-    }
-    allTriplets.reserve(totalSize);
-
-    for (auto& v : tripletsPerThread) {
-        allTriplets.insert(allTriplets.end(), v.begin(), v.end());
-    }
-
-    // 批量构造稀疏矩阵；如果有重复项则自动求和
-    qbar.setFromTriplets(allTriplets.begin(), allTriplets.end(),
-                         [](const double& x, const double& y) { return x + y; });
+    );
 
     qbar.makeCompressed();
 
     return 0;
 }
+
 
 
 int N1Bab(const std::vector<PairNew*>& bra,
@@ -589,16 +1060,121 @@ int N1Bab(const std::vector<PairNew*>& bra,
 }
 
 
-int generalMultiCommutator(const vector<PairNew*>& bra, const vector<PairNew*>& ket,
-    vector<Eigen::Product<Eigen::SparseMatrix<double, Eigen::RowMajor>, Eigen::SparseMatrix<double, Eigen::RowMajor>,
-    Eigen::AliasFreeProduct>>& resultQ) {
-    auto N = ket.size();
+int generalMultiCommutator20(const vector<PairNew*>& bra,
+    const vector<PairNew*>& ket,
+    std::vector<ProductType>& resultQ) {
+    const int N = static_cast<int>(ket.size());
+    const int NI = static_cast<int>(bra.size());
+
     // recursion end
-    if (bra.empty() && N == 2) {
-        auto Q = ket[0]->pab * ket[1]->pab;
+    if (NI == 1 && N == 3) {
+        auto Q = ket[1]->pab * ket[2]->pab;
         resultQ.emplace_back(Q);
+        return 0;
+    }
+
+    auto pnPrime = bra.back();
+
+    // 第一类 contraction
+    for (int k = 1; k < N; k++) {
+        auto braNext = bra;
+        braNext.pop_back();
+
+        auto ketNext = ket;
+
+        if (k != N - 1) {
+            // contract the trace to P_N
+            auto pn = ketNext.back();
+            auto pk = ketNext[k];
+
+            ketNext.pop_back();
+            ketNext.erase(ketNext.begin() + k);
+
+            auto Pk = new PairNew();
+
+            // 原来：
+            // Eigen::SparseMatrix<double> pTem = pk->pab * pnPrime->pab;
+            // Pk->pab = -2 * sparseTrace(pTem) * pn->pab;
+
+            const double tr = sparseTraceProduct(pk->pab, pnPrime->pab);
+            Pk->pab = (-2.0 * tr) * pn->pab;
+            Pk->pab.prune(1e-11);
+
+            ketNext.push_back(Pk);
+
+            generalMultiCommutator20(braNext, ketNext, resultQ);
+
+        } else {
+            // contract the trace to P_{N-1} when k = N
+            auto pnk = ketNext.back();
+            ketNext.pop_back();
+
+            auto pnMinus1 = ketNext.back();
+            ketNext.pop_back();
+
+            auto Pk = new PairNew();
+
+            const double tr = sparseTraceProduct(pnk->pab, pnPrime->pab);
+            Pk->pab = (-2.0 * tr) * pnMinus1->pab;
+            Pk->pab.prune(1e-11);
+
+            ketNext.push_back(Pk);
+
+            generalMultiCommutator20(braNext, ketNext, resultQ);
+        }
+    }
+
+    // 第二类 contraction
+    for (int k = 1; k < N; k++) {
+        for (int i = 1; i < k; i++) {
+            auto braNext = bra;
+            braNext.pop_back();
+
+            auto ketNext = ket;
+
+            auto pk = ketNext[k];
+            auto pi = ketNext[i];
+
+            auto Pik = new PairNew();
+
+            // i < k，所以 erase 顺序不能反
+            ketNext.erase(ketNext.begin() + k);
+            ketNext.erase(ketNext.begin() + i);
+
+            // 原来：
+            // Pik->pab = 4 * (pk->pab * pnPrime->pab * pi->pab
+            //              + pi->pab * pnPrime->pab * pk->pab);
+
+            SpMat leftTmp = pk->pab * pnPrime->pab;
+            SpMat left = leftTmp * pi->pab;
+
+            SpMat rightTmp = pi->pab * pnPrime->pab;
+            SpMat right = rightTmp * pk->pab;
+
+            Pik->pab = 4.0 * (left + right);
+            Pik->pab.prune(1e-11);
+            Pik->pab.makeCompressed();
+
+            ketNext.push_back(Pik);
+
+            generalMultiCommutator20(braNext, ketNext, resultQ);
+        }
+    }
+
+    return 0;
+}
+
+
+int generalMultiCommutator110(const vector<PairNew*>& bra,
+    const vector<PairNew*>& ket,
+    vector<pair<Eigen::VectorXd, Eigen::SparseMatrix<double, Eigen::RowMajor>>>& resultAP) {
+    auto N = ket.size();
+    auto NI = bra.size();
+    // recursion end
+    if (NI == 0 && N == 2) {
+        resultAP.emplace_back(ket[0]->sa, ket[1]->pab);
     } else {
-        for (int k = 0; k < N; k++) {
+        for (int k = 1; k < N; k++) {
             if (k != N - 1) { // contract the trace to P_{N}
                 auto braNext = bra;
                 auto pnPrime = braNext.back();
@@ -612,7 +1188,7 @@ int generalMultiCommutator(const vector<PairNew*>& bra, const vector<PairNew*>& 
                 Eigen::SparseMatrix<double> pTem = pk->pab * pnPrime->pab;
                 Pk->pab = -2 * sparseTrace(pTem) * pn->pab;
                 ketNext.push_back(Pk);
-                generalMultiCommutator(braNext, ketNext, resultQ);
+                generalMultiCommutator110(braNext, ketNext, resultAP);
             } else { // contract the trace to P_{N-1} when k = N
                 auto braNext = bra;
                 auto pnPrime = braNext.back();
@@ -623,14 +1199,17 @@ int generalMultiCommutator(const vector<PairNew*>& bra, const vector<PairNew*>& 
                 auto pnMinus1 = ketNext.back();
                 ketNext.pop_back();
                 auto Pk = new PairNew();
+                if (pnk->pab.rows() != pnPrime->pab.cols()) {
+                    pnk->pab = pnPrime->pab;
+                }
                 Eigen::SparseMatrix<double> pTem = pnk->pab * pnPrime->pab;
                 Pk->pab = -2 * sparseTrace(pTem) * pnMinus1->pab;
                 ketNext.push_back(Pk);
-                generalMultiCommutator(braNext, ketNext, resultQ);
+                generalMultiCommutator110(braNext, ketNext, resultAP);
             }
         }
-        for (int k = 0; k < N; k++) {
-            for (int i = 0; i < k; i++) {
+        for (int k = 1; k < N; k++) {
+            for (int i = 1; i < k; i++) {
                 auto braNext = bra;
                 auto pnPrime = braNext.back();
                 braNext.pop_back();
@@ -638,13 +1217,28 @@ int generalMultiCommutator(const vector<PairNew*>& bra, const vector<PairNew*>& 
                 auto pk = ketNext[k];
                 auto pi = ketNext[i];
                 auto Pik = new PairNew();
-                // i < k, so erase order can not be changed.
+                // i < k, so erase sequence can not be changed.
                 ketNext.erase(ketNext.begin() + k);
                 ketNext.erase(ketNext.begin() + i);
                 Pik->pab = 4 * (pk->pab * pnPrime->pab * pi->pab + pi->pab * pnPrime->pab * pk->pab);
                 ketNext.push_back(Pik);
-                generalMultiCommutator(braNext, ketNext, resultQ);
+                generalMultiCommutator110(braNext, ketNext, resultAP);
             }
+        }
+        for (int k = 1; k < N; k++) {
+            auto braNext = bra;
+            auto pnPrime = braNext.back();
+            braNext.pop_back();
+            auto ketNext = ket;
+            auto p0 = ketNext[0];
+            auto pk = ketNext[k];
+            // careful about the erase sequence
+            ketNext.erase(ketNext.begin() + k);
+            ketNext.erase(ketNext.begin());
+            auto sk = new PairNew();
+            sk->sa = 4 * pk->pab * pnPrime->pab * p0->sa;
+            ketNext.insert(ketNext.begin(), sk);
+            generalMultiCommutator110(braNext, ketNext, resultAP);
         }
     }
     return 0;
@@ -657,7 +1251,10 @@ int gramSchmidt(Eigen::MatrixXd& overlapMapJ,
     Eigen::MatrixXd& orthogonalBasis,
     Eigen::MatrixXd& transformMatrix0,
     Eigen::MatrixXd& transformMatrix1) {
+
     int dim = static_cast<int>(overlapMapJ.cols());
+
+    bool isOdd = basesJ[0][0].second != 0;
 
     Eigen::MatrixXd omNew;
     omNew.resize(dim, dim);
@@ -749,7 +1346,7 @@ int gramSchmidt(Eigen::MatrixXd& overlapMapJ,
         removeColumn(orthogonalBasis, k);
 
         removeRow(transformMatrix0, k);
-        removeRow(transformMatrix1, k);
+        if (!isOdd) removeRow(transformMatrix1, k);
     }
 
     return 0;
@@ -776,11 +1373,14 @@ int removeUselessBasesJ(vector<vector<pair<int, int>>>& basesJ,
         }
     }
     return 0;
-};
+}
 
-
-int transferMatrix(const vector<Pair*>& pairs, const vector<PairM*>& pairMs,
-    const vector<vector<pair<int, int>>>& basesJ, const vector<vector<int>>& basisM,
+int transferMatrix(const vector<Pair*>& pairs,
+    const vector<PairM*>& pairMs,
+    const vector<A0*>& A0s,
+    const vector<P0*>& P0s,
+    const vector<vector<pair<int, int>>>& basesJ,
+    const vector<vector<int>>& basisM,
     Eigen::MatrixXd& transformMatrix) {
     int rows = basesJ.size();
     const int cols = static_cast<int>(basisM.size());
@@ -797,7 +1397,7 @@ int transferMatrix(const vector<Pair*>& pairs, const vector<PairM*>& pairMs,
                 basisPair.push_back(basis[k].first);
                 jis.push_back(basis[k].second);
             }
-            transformMatrix(j, i) = transferMatrixJMOne(pairs, pairMs, basisPair,
+            transformMatrix(j, i) = transferMatrixJMOne(pairs, pairMs, A0s, P0s, basisPair,
                 jis, basisM[i]);
         }
     }
@@ -806,10 +1406,21 @@ int transferMatrix(const vector<Pair*>& pairs, const vector<PairM*>& pairMs,
 }
 
 
-double transferMatrixJMOne(const vector<Pair*>& pairs, const vector<PairM*>& pairMs, const vector<int>& basis,
-    const vector<int>& jis, const vector<int>& basisM) {
+double transferMatrixJMOne(const vector<Pair*>& pairs,
+    const vector<PairM*>& pairMs,
+    const vector<A0*>& A0s,
+    const vector<P0*>& P0s,
+    const vector<int>& basis,
+    const vector<int>& jis,
+    const vector<int>& basisM) {
 
-    for (int i = 0; i < basis.size(); i++) {
+    bool isOdd = basis[0] != -1;
+
+    if (isOdd) {
+        if (A0s[basis[0]]->index != P0s[basisM[0]]->indexJ) return 0.0;
+    }
+
+    for (int i = 1; i < basis.size(); i++) {
         if (pairs[basis[i]]->index != pairMs[basisM[i]]->indexJ) {
             return 0.0;
         }
@@ -817,9 +1428,11 @@ double transferMatrixJMOne(const vector<Pair*>& pairs, const vector<PairM*>& pai
 
     double Tcg = 1.0;
     vector<pair<int, int>> classify;
-    int type = pairs[basis[0]]->index;
-    pair se = {0, 0};
-    for (const int bs : basis) {
+    int type = pairs[basis[1]]->index;
+    pair se = {1, 1};
+    vector<int> basisTem = basis;
+    basisTem.erase(basisTem.begin());
+    for (const int bs : basisTem) {
         if (pairs[bs]->index == type) {
             se.second += 1;
         } else {
@@ -831,6 +1444,7 @@ double transferMatrixJMOne(const vector<Pair*>& pairs, const vector<PairM*>& pai
     classify.push_back(se);
 
     int M0 = 0;
+    if (isOdd) M0 = P0s[basisM[0]]->m;
     for (int i = 0; i < classify.size(); i++) {
         auto cf = classify[i];
         vector jisSliced(jis.begin() + cf.first, jis.begin() + cf.second);
@@ -842,6 +1456,7 @@ double transferMatrixJMOne(const vector<Pair*>& pairs, const vector<PairM*>& pai
         int J0;
         if (i == 0) {
             J0 = 0;
+            if (isOdd) J0 = A0s[basis[0]]->j;
         } else {
             J0 = jis[cf.first - 1];
         }
@@ -875,50 +1490,253 @@ double CgJ0JnrM0m1mn(const int J0, const int M0, const int r, const int start,
 }
 
 
-int gaby6(const vector<PairM*>& pairMs, const vector<int>& bra, const vector<int>& ket, const int orbitNumber,
-    Eigen::MatrixXd& gaby6Matrix, map<vector<int>, Eigen::SparseMatrix<double, Eigen::RowMajor>>& qbarMap) {
-    gaby6Matrix.resize(orbitNumber * orbitNumber, orbitNumber * orbitNumber);
+int gaby6(const vector<PairM*>& pairMs,
+    const vector<P0*>& P0s,
+    const vector<int>& bra,
+    const vector<int>& ket,
+    const int orbitNumber,
+    Eigen::MatrixXd& gaby6Matrix,
+    map<vector<int>, Eigen::SparseMatrix<double, Eigen::RowMajor>>& qbarMap) {
+
+    const int n = orbitNumber;
+
+    gaby6Matrix.resize(n * n, n * n);
     gaby6Matrix.setZero();
+
+    bool isOdd = bra[0] != -1;
+
+    // ============================================================
+    // isOdd == true：保持你的原代码逻辑不动
+    // ============================================================
+
+    if (isOdd) {
+        vector<PairNew*> ketNext;
+
+        auto p0newKet = new PairNew();
+        p0newKet->sa = P0s[ket[0]]->sa;
+        ketNext.push_back(p0newKet);
+
+        for (int i = 1; i < ket.size(); i++) {
+            auto pw = new PairNew();
+            pw->pab = pairMs[ket[i]]->pab;
+            ketNext.push_back(pw);
+        }
+
+        for (int i = 1; i < bra.size(); i++) {
+            auto braTem = bra;
+            braTem.erase(braTem.begin() + i);
+            auto Pk = pairMs[bra[i]];
+
+            vector<PairNew*> braNext;
+            auto p0newBra = new PairNew();
+            p0newBra->sa = P0s[bra[0]]->sa;
+
+            for (int j = 1; j < braTem.size(); j++) {
+                auto pw = new PairNew();
+                pw->pab = pairMs[braTem[j]]->pab;
+                braNext.push_back(pw);
+            }
+
+            Eigen::SparseMatrix<double, Eigen::RowMajor> qbar;
+            Eigen::SparseMatrix<double, Eigen::RowMajor> Bab(orbitNumber, orbitNumber);
+
+            auto syPrime = P0s[bra[0]]->sa;
+            BabByTaby(braNext, ketNext, syPrime, orbitNumber, Bab);
+
+            for (int alpha = 0; alpha < orbitNumber; ++alpha) {
+                for (int beta = 0; beta < orbitNumber; ++beta) {
+                    const auto pkab = 4.0 * Pk->pab.coeff(alpha, beta);
+                    gaby6Matrix.block(alpha * orbitNumber, beta * orbitNumber,
+                                      orbitNumber, orbitNumber) += pkab * Bab;
+                }
+            }
+
+            auto sPrime = P0s[bra[0]]->sa;
+            vector<Eigen::MatrixXd> tbar;
+
+            taby(braNext, ketNext, orbitNumber, tbar);
+
+            for (int alpha = 0; alpha < orbitNumber; ++alpha) {
+                for (int beta = 0; beta < orbitNumber; ++beta) {
+                    for (int gamma = 0; gamma < orbitNumber; ++gamma) {
+                        for (int delta = 0; delta < orbitNumber; ++delta) {
+                            for (int alphaPrime = 0; alphaPrime < orbitNumber; ++alphaPrime) {
+                                gaby6Matrix(alpha * orbitNumber + gamma, beta * orbitNumber + delta) +=
+                                    12.0 * (sPrime(alpha) * Pk->pab.coeff(beta, alphaPrime)
+                                    - sPrime(beta) * Pk->pab.coeff(alpha, alphaPrime))
+                                    * tbar[alphaPrime](gamma, delta);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for (int k = 1; k < bra.size(); k++) {
+            for (int i = 1; i < k; i++) {
+                auto Pi = pairMs[bra[i]];
+                auto Pk = pairMs[bra[k]];
+
+                auto braTem = bra;
+                braTem.erase(braTem.begin() + k);
+                braTem.erase(braTem.begin() + i);
+
+                vector<PairNew*> braNext;
+                auto p0newBra = new PairNew();
+                p0newBra->sa = P0s[bra[0]]->sa;
+                braNext.push_back(p0newBra);
+
+                for (int j = 1; j < braTem.size(); j++) {
+                    auto pw = new PairNew();
+                    pw->pab = pairMs[braTem[j]]->pab;
+                    braNext.push_back(pw);
+                }
+
+                Eigen::SparseMatrix<double, Eigen::RowMajor> qbar;
+
+                N2Qaby6Odd(braNext, ketNext, orbitNumber, qbar);
+
+                const int n = orbitNumber;
+                const auto& PkMat = Pk->pab;
+                const auto& PiMat = Pi->pab;
+
+                for (int gamma = 0; gamma < n; ++gamma) {
+                    for (int delta = 0; delta < n; ++delta) {
+                        std::vector<Eigen::Triplet<double>> triplets;
+                        triplets.reserve(n * n / 10);
+
+                        for (int alpha = 0; alpha < n; ++alpha) {
+                            for (int beta = 0; beta < n; ++beta) {
+                                double val = qbar.coeff(alpha * n + gamma, beta * n + delta);
+                                if (std::abs(val) > 1e-11) {
+                                    triplets.emplace_back(alpha, beta, val);
+                                }
+                            }
+                        }
+
+                        if (triplets.empty()) continue;
+
+                        Eigen::SparseMatrix<double, Eigen::RowMajor> qbarAB(n, n);
+                        qbarAB.setFromTriplets(triplets.begin(), triplets.end());
+
+                        Eigen::SparseMatrix<double, Eigen::RowMajor> Sab =
+                            PkMat * qbarAB * PiMat + PiMat * qbarAB * PkMat;
+                        Sab *= 96.0;
+
+                        for (int x = 0; x < Sab.outerSize(); ++x) {
+                            for (Eigen::SparseMatrix<double, Eigen::RowMajor>::InnerIterator it(Sab, x); it; ++it) {
+                                gaby6Matrix(it.row() * n + gamma, it.col() * n + delta) += it.value();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return 0;
+    }
+
+    // ============================================================
+    // isOdd == false：优化版本
+    // ============================================================
+
+    std::vector<std::unique_ptr<PairNew>> pool;
+
+    auto makePairNew = [&pool]() -> PairNew* {
+        pool.push_back(std::make_unique<PairNew>());
+        return pool.back().get();
+    };
+
+    // 构造 ketNext
     vector<PairNew*> ketNext;
-    for (int i = 0; i < ket.size(); i++) {
-        auto pw = new PairNew();
+    ketNext.reserve(ket.size());
+
+    auto p0newKet = makePairNew();
+    ketNext.push_back(p0newKet);
+
+    for (int i = 1; i < static_cast<int>(ket.size()); i++) {
+        auto pw = makePairNew();
         pw->pab = pairMs[ket[i]]->pab;
         ketNext.push_back(pw);
     }
 
-    for (int i = 0; i < bra.size(); i++) {
+    // 缓存 PairM 的行列访问结构，供第二部分使用
+    std::vector<char> accessBuilt(pairMs.size(), 0);
+    std::vector<SparseAccess> accessCache(pairMs.size());
+
+    auto getAccess = [&](int pairIndex) -> SparseAccess& {
+        if (!accessBuilt[pairIndex]) {
+            accessCache[pairIndex] = buildSparseAccessRM(pairMs[pairIndex]->pab, n);
+            accessBuilt[pairIndex] = 1;
+        }
+
+        return accessCache[pairIndex];
+    };
+
+    // ============================================================
+    // 第一部分优化：
+    //
+    // 原来：
+    // for alpha,beta:
+    //     G.block(...) += 4 * Pk(alpha,beta) * Bab
+    //
+    // 现在：
+    // 只遍历 Pk 和 Bab 的非零元
+    // ============================================================
+
+    for (int i = 1; i < static_cast<int>(bra.size()); i++) {
         auto braTem = bra;
         braTem.erase(braTem.begin() + i);
+
         auto Pk = pairMs[bra[i]];
+
         vector<PairNew*> braNext;
-        for (int j = 0; j < braTem.size(); j++) {
-            auto pw = new PairNew();
+        braNext.reserve(braTem.size());
+
+        auto p0newBra = makePairNew();
+        braNext.push_back(p0newBra);
+
+        for (int j = 1; j < static_cast<int>(braTem.size()); j++) {
+            auto pw = makePairNew();
             pw->pab = pairMs[braTem[j]]->pab;
             braNext.push_back(pw);
         }
-        Eigen::SparseMatrix<double, Eigen::RowMajor> qbar;
-        Eigen::SparseMatrix<double, Eigen::RowMajor> Bab(orbitNumber, orbitNumber);
+
+        Eigen::SparseMatrix<double, Eigen::RowMajor> Bab(n, n);
 
         auto bt2 = braTem;
         bt2.pop_back();
-        sort(bt2.begin(), bt2.end());
-        if (qbarMap.contains(bt2)) qbar = qbarMap[bt2];
+        bt2.erase(bt2.begin());
 
-        N1Bab(braNext, ketNext, orbitNumber, qbar, Bab);
+        // 关键优化：直接引用 qbarMap 中的 qbar，避免复制
+        auto [it, inserted] = qbarMap.try_emplace(bt2);
+        Eigen::SparseMatrix<double, Eigen::RowMajor>& qbarRef = it->second;
 
-        qbarMap[bt2] = qbar;
+        N1Bab(braNext, ketNext, n, qbarRef, Bab);
 
-        for (int alpha = 0; alpha < orbitNumber; ++alpha) {
-            for (int beta = 0; beta < orbitNumber; ++beta) {
-                const auto pkab = 4.0 * Pk->pab.coeff(alpha, beta);
-                gaby6Matrix.block(alpha * orbitNumber, beta * orbitNumber,
-                                  orbitNumber, orbitNumber) += pkab * Bab;
-            }
-        }
+        addScaledKronSparseToDense(
+            gaby6Matrix,
+            Pk->pab,
+            Bab,
+            n,
+            4.0
+        );
     }
 
-    for (int k = 0; k < bra.size(); k++) {
-        for (int i = 0; i < k; i++) {
+    // ============================================================
+    // 第二部分优化：
+    //
+    // 原来：
+    // for gamma,delta:
+    //     构造 qbarAB
+    //     Sab = Pk*qbarAB*Pi + Pi*qbarAB*Pk
+    //
+    // 现在：
+    // 直接遍历 qbar 的非零元
+    // ============================================================
+
+    for (int k = 1; k < static_cast<int>(bra.size()); k++) {
+        for (int i = 1; i < k; i++) {
             auto Pi = pairMs[bra[i]];
             auto Pk = pairMs[bra[k]];
 
@@ -927,57 +1745,36 @@ int gaby6(const vector<PairM*>& pairMs, const vector<int>& bra, const vector<int
             braTem.erase(braTem.begin() + i);
 
             vector<PairNew*> braNext;
-            for (int j = 0; j < braTem.size(); j++) {
-                auto pw = new PairNew();
+            braNext.reserve(braTem.size());
+
+            auto p0newBra = makePairNew();
+            braNext.push_back(p0newBra);
+
+            for (int j = 1; j < static_cast<int>(braTem.size()); j++) {
+                auto pw = makePairNew();
                 pw->pab = pairMs[braTem[j]]->pab;
                 braNext.push_back(pw);
             }
 
-            Eigen::SparseMatrix<double, Eigen::RowMajor> qbar;
+            // 关键优化：直接使用 map 内部的 qbar
+            auto [it, inserted] = qbarMap.try_emplace(braTem);
+            Eigen::SparseMatrix<double, Eigen::RowMajor>& qbarRef = it->second;
 
-            auto bt2 = braTem;
-            sort(bt2.begin(), bt2.end());
-            if (qbarMap.contains(bt2)) qbar = qbarMap[bt2];
-            else {
-                N2Qaby6(braNext, ketNext, orbitNumber, qbar);
-                qbarMap[bt2] = qbar;
+            if (qbarRef.size() == 0) {
+                N2Qaby6(braNext, ketNext, n, qbarRef);
             }
 
+            const SparseAccess& PkAcc = getAccess(bra[k]);
+            const SparseAccess& PiAcc = getAccess(bra[i]);
 
-            const int n = orbitNumber;
-            const auto& PkMat = Pk->pab;
-            const auto& PiMat = Pi->pab;
-
-            for (int gamma = 0; gamma < n; ++gamma) {
-                for (int delta = 0; delta < n; ++delta) {
-                    std::vector<Eigen::Triplet<double>> triplets;
-                    triplets.reserve(n * n / 10); // 按稀疏度估一个值
-
-                    for (int alpha = 0; alpha < n; ++alpha) {
-                        for (int beta = 0; beta < n; ++beta) {
-                            double val = qbar.coeff(alpha * n + gamma, beta * n + delta);
-                            if (std::abs(val) > 1e-11) {
-                                triplets.emplace_back(alpha, beta, val);
-                            }
-                        }
-                    }
-
-                    if (triplets.empty()) continue;
-
-                    Eigen::SparseMatrix<double, Eigen::RowMajor> qbarAB(n, n);
-                    qbarAB.setFromTriplets(triplets.begin(), triplets.end());
-
-                    Eigen::SparseMatrix<double, Eigen::RowMajor> Sab =
-                        PkMat * qbarAB * PiMat + PiMat * qbarAB * PkMat;
-                    Sab *= 96.0;
-
-                    for (int k = 0; k < Sab.outerSize(); ++k) {
-                        for (Eigen::SparseMatrix<double, Eigen::RowMajor>::InnerIterator it(Sab, k); it; ++it) {
-                            gaby6Matrix(it.row() * n + gamma, it.col() * n + delta) += it.value();
-                        }
-                    }
-                }
-            }
+            addQbarContractToDense(
+                gaby6Matrix,
+                qbarRef,
+                PkAcc,
+                PiAcc,
+                n,
+                96.0
+            );
         }
     }
 
@@ -985,23 +1782,41 @@ int gaby6(const vector<PairM*>& pairMs, const vector<int>& bra, const vector<int
 }
 
 
-int fab(const vector<PairM*>& pairMs, const vector<int>& bra, const vector<int>& ket, const int orbitNumber,
-    Eigen::MatrixXd& fabMatrix, map<vector<int>, Eigen::SparseMatrix<double, Eigen::RowMajor>>& qbarMap) {
+
+int fab(const vector<PairM*>& pairMs,
+    const vector<P0*>& P0s,
+    const vector<int>& bra,
+    const vector<int>& ket,
+    const int orbitNumber,
+    Eigen::MatrixXd& fabMatrix,
+    map<vector<int>, Eigen::SparseMatrix<double, Eigen::RowMajor>>& qbarMap) {
     fabMatrix.resize(orbitNumber, orbitNumber);
     fabMatrix.setZero();
     vector<PairNew*> ketNext;
-    for (int i = 0; i < ket.size(); i++) {
+
+    bool isOdd = bra[0] != -1;
+
+    auto p0newKet = new PairNew();
+    if (isOdd) p0newKet->sa = P0s[ket[0]]->sa;
+    ketNext.push_back(p0newKet);
+
+    for (int i = 1; i < ket.size(); i++) {
         auto pw = new PairNew();
         pw->pab = pairMs[ket[i]]->pab;
         ketNext.push_back(pw);
     }
 
-    for (int i = 0; i < bra.size(); i++) {
+    for (int i = 1; i < bra.size(); i++) {
         auto braTem = bra;
         braTem.erase(braTem.begin() + i);
         auto Pk = pairMs[bra[i]];
+
         vector<PairNew*> braNext;
-        for (int j = 0; j < braTem.size(); j++) {
+        auto p0newBra = new PairNew();
+        if (isOdd) p0newBra->sa = P0s[bra[0]]->sa;
+        else braNext.push_back(p0newBra);
+
+        for (int j = 1; j < braTem.size(); j++) {
             auto pw = new PairNew();
             pw->pab = pairMs[braTem[j]]->pab;
             braNext.push_back(pw);
@@ -1009,15 +1824,50 @@ int fab(const vector<PairM*>& pairMs, const vector<int>& bra, const vector<int>&
         Eigen::SparseMatrix<double, Eigen::RowMajor> qbar;
         Eigen::SparseMatrix<double, Eigen::RowMajor> Bab(orbitNumber, orbitNumber);
 
-        auto bt2 = braTem;
-        bt2.pop_back();
-        sort(bt2.begin(), bt2.end());
-        if (qbarMap.contains(bt2)) qbar = qbarMap[bt2];
+        if (!isOdd) {
+            auto bt2 = braTem;
+            bt2.pop_back();
+            //sort(bt2.begin(), bt2.end());
+            if (qbarMap.contains(bt2)) qbar = qbarMap[bt2];
 
-        N1Bab(braNext, ketNext, orbitNumber, qbar, Bab);
-        fabMatrix += 4 * Pk->pab * Bab.transpose();
+            N1Bab(braNext, ketNext, orbitNumber, qbar, Bab);
+            fabMatrix += 4 * Pk->pab * Bab.transpose();
 
-        qbarMap[bt2] = qbar;
+            qbarMap[bt2] = qbar;
+        } else {
+            auto syPrime = P0s[bra[0]]->sa;
+            BabByTaby(braNext, ketNext, syPrime, orbitNumber, Bab);
+            fabMatrix += 4 * Pk->pab * Bab.transpose();
+        }
+    }
+    if (isOdd) {
+        auto sPrime = P0s[bra[0]]->sa;
+
+        auto braTem = bra;
+        auto pnPrime = pairMs[bra.back()];
+        braTem.pop_back();
+
+        vector<PairNew*> braNext;
+
+        for (int j = 1; j < braTem.size(); j++) {
+            auto pw = new PairNew();
+            pw->pab = pairMs[braTem[j]]->pab;
+            braNext.push_back(pw);
+        }
+
+        vector<Eigen::MatrixXd> tbar;
+
+        taby(braNext, ketNext, orbitNumber, tbar);
+        for (int alpha = 0; alpha < orbitNumber; alpha++) {
+            for (int beta = 0; beta < orbitNumber; beta++) {
+                for (int gamma = 0; gamma < orbitNumber; gamma++) {
+                    for (int delta = 0; delta < orbitNumber; delta++) {
+                        fabMatrix(alpha, beta) += 6.0 * sPrime(alpha) * tbar[beta](gamma, delta)
+                            * pnPrime->pab.coeff(gamma, delta);
+                    }
+                }
+            }
+        }
     }
     return 0;
 }
@@ -1312,10 +2162,11 @@ int interactionAntiSymmetricPN(map<TBMEJ, map<pair<int, int>, double>>& imp) {
 
 
 int calHamiltonianMatrix(const std::vector<PairM*>& pairMs,
+    const vector<P0*>& P0s,
     const std::vector<std::vector<int>>& basesM,
     const int orbitNumber,
     const std::vector<std::vector<Eigen::MatrixXd>>& fabMap,
-    Eigen::SparseMatrix<double>& oaby6Matrix,
+    const Eigen::SparseMatrix<double>& oaby6Matrix,
     Eigen::MatrixXd& qabMatrix,
     Eigen::MatrixXd& hamMatrix) {
     const int N = static_cast<int>(basesM.size());
@@ -1354,7 +2205,7 @@ int calHamiltonianMatrix(const std::vector<PairM*>& pairMs,
             const auto& basisMBra = basesM[i];
 
             Eigen::MatrixXd gaby6Matrix;
-            gaby6(pairMs, basisMBra, basisMKet, orbitNumber, gaby6Matrix, qbarMap);
+            gaby6(pairMs, P0s, basisMBra, basisMKet, orbitNumber, gaby6Matrix, qbarMap);
 
             const Eigen::MatrixXd& fabMatrix = fabMap[i][j];
 
@@ -1743,6 +2594,7 @@ int generateQMMatrix(const vector<vector<int>>& braBasesM,
 
 
 int generateFabMap(const vector<PairM*>& pairMs,
+    const vector<P0*>& P0s,
     const vector<vector<int>>& basesMBra,
     const vector<vector<int>>& basesMKet,
     const int orbitNumber,
@@ -1758,7 +2610,7 @@ int generateFabMap(const vector<PairM*>& pairMs,
         for (int i = 0; i < dim1; i++) {
             Eigen::MatrixXd fabMatrix;
             const auto& basisMBra = basesMBra[i];
-            fab(pairMs, basisMBra, basisMKet, orbitNumber, fabMatrix, qbarMap);
+            fab(pairMs, P0s, basisMBra, basisMKet, orbitNumber, fabMatrix, qbarMap);
             fabMap[i][j] = fabMatrix;
         }
     }
@@ -1804,6 +2656,8 @@ int generateReducedOrthogonalQJ(const vector<int>& ts,
     const Eigen::MatrixXd& orthogonalBasis,
     vector<vector<Eigen::MatrixXd>>& reducedJMatrix) {
 
+    bool isOdd = basesJ[0][0].second != 0;
+
     int dim1 = ts.size();
 
     #pragma omp parallel for collapse(2) schedule(dynamic)
@@ -1818,10 +2672,14 @@ int generateReducedOrthogonalQJ(const vector<int>& ts,
                     int J = basesJ[k].back().second;
                     int JPrime = basesJ[l].back().second;
                     if (isTriangle(JPrime, J, t)) {
-                        if ((J + JPrime + t) % 4 == 0) {
-                            oneBlock(k, l) = qJMatrix00[i][j](k, l) / CgInt(JPrime, 0, t, 0, J, 0);
+                        if (isOdd) {
+                            oneBlock(k, l) = qJMatrix00[i][j](k, l) / CgInt(JPrime, 1, t, 0, J, 1);
                         } else {
-                            oneBlock(k, l) = qJMatrix01[i][j](k, l) / CgInt(JPrime, 2, t, -2, J, 0);
+                            if ((J + JPrime + t) % 4 == 0) {
+                                oneBlock(k, l) = qJMatrix00[i][j](k, l) / CgInt(JPrime, 0, t, 0, J, 0);
+                            } else {
+                                oneBlock(k, l) = qJMatrix01[i][j](k, l) / CgInt(JPrime, 2, t, -2, J, 0);
+                            }
                         }
                     }
                 }
@@ -2410,4 +3268,173 @@ double calculateBM1(const vector<vector<pair<int, int>>>& basesJP,
     double mFi = calMfi(basesJP, basesJN, braBasesJPN, ketBasesJPN, t, initial, final, reducedQopJP, reducedQopJN);
     result = (final.J + 1.0) / (initial.J + 1.0) * mFi * mFi;
     return result;
+}
+
+
+int N2Qaby6Odd(const vector<PairNew*>& bra,
+    const vector<PairNew*>& ket,
+    const int orbitNumber,
+    Eigen::SparseMatrix<double, Eigen::RowMajor>& qbar) {
+
+    vector<Eigen::Product<Eigen::SparseMatrix<double, Eigen::RowMajor>, Eigen::SparseMatrix<double, Eigen::RowMajor>,
+    Eigen::AliasFreeProduct>> resultQ;
+
+    generalMultiCommutator20(bra, ket, resultQ);
+
+
+    const int n = orbitNumber;
+    const int qSize = static_cast<int>(resultQ.size());
+    const int dim = n * n;
+    const double one_sixth = 1.0 / 6.0;
+
+    qbar.resize(dim, dim);
+
+    // 24 个排列，以及对应奇偶性
+    static const int perm[24][4] = {
+        {0,1,2,3}, {0,1,3,2}, {0,2,1,3}, {0,2,3,1},
+        {0,3,1,2}, {0,3,2,1}, {1,0,2,3}, {1,0,3,2},
+        {1,2,0,3}, {1,2,3,0}, {1,3,0,2}, {1,3,2,0},
+        {2,0,1,3}, {2,0,3,1}, {2,1,0,3}, {2,1,3,0},
+        {2,3,0,1}, {2,3,1,0}, {3,0,1,2}, {3,0,2,1},
+        {3,1,0,2}, {3,1,2,0}, {3,2,0,1}, {3,2,1,0}
+    };
+
+    static const int sign[24] = {
+        +1,-1,-1,+1,+1,-1,-1,+1,+1,-1,-1,+1,
+        +1,-1,-1,+1,+1,-1,-1,+1,+1,-1,-1,+1
+    };
+
+    // 预缓存 lhs/rhs 指针，避免反复 resultQ[m].lhs()/rhs()
+    std::vector<const Eigen::SparseMatrix<double>*> Ls(qSize);
+    std::vector<const Eigen::SparseMatrix<double>*> Rs(qSize);
+    for (int m = 0; m < qSize; ++m) {
+        Ls[m] = std::vector<const Eigen::SparseMatrix<double> *>::value_type(&resultQ[m].lhs());
+        Rs[m] = std::vector<const Eigen::SparseMatrix<double> *>::value_type(&resultQ[m].rhs());
+    }
+
+    auto s = ket[0]->sa;
+    auto sPrime = bra[0]->sa;
+
+    Eigen::MatrixXd qaby6;
+
+    qaby6.resize(n * n, n * n);
+    qaby6.setZero();
+
+    for (int m = 0; m < qSize; ++m) {
+        const auto& L = *Ls[m];
+        const auto& R = *Rs[m];
+        Eigen::MatrixXd tem1 = s * sPrime.transpose() * L + L * sPrime * s.transpose();
+        Eigen::MatrixXd tem2 = s * sPrime.transpose() * R + R * sPrime * s.transpose();
+        for (int a = 0; a < n; ++a) {
+            for (int b = 0; b < n; ++b) {
+                for (int c = 0; c < n; ++c) {
+                    for (int d = 0; d < n; ++d) {
+                        const int row = a * n + b;
+                        const int col = c * n + d;
+                        qaby6(row, col) += (sPrime.transpose() * s)(0) * L.coeff(a, b) * R.coeff(c, d)
+                                    - tem1(a, b) * R.coeff(c, d)
+                                    - tem2(a, b) * L.coeff(c, d);
+                    }
+                }
+            }
+        }
+    }
+
+    // 每个线程一个 triplet 容器，避免锁竞争
+    int numThreads = 1;
+    #ifdef _OPENMP
+    numThreads = omp_get_max_threads();
+    #endif
+
+    std::vector<std::vector<Eigen::Triplet<double>>> tripletsPerThread(numThreads);
+
+    // 粗略预留一下空间：
+    // 每个独立四元组最多产生 24 个非零
+    // 独立四元组数量是 C(n,4)
+    const long long numUnique =
+        (n >= 4) ? (1LL * n * (n - 1) * (n - 2) * (n - 3) / 24) : 0LL;
+
+    for (int t = 0; t < numThreads; ++t) {
+        tripletsPerThread[t].reserve(static_cast<size_t>(numUnique * 24 / numThreads + 1024));
+    }
+
+    std::vector<std::array<int, 4>> combos;
+    combos.reserve((n >= 4) ? (1LL * n * (n - 1) * (n - 2) * (n - 3) / 24) : 0);
+
+    for (int a = 0; a < n; ++a) {
+        for (int b = a + 1; b < n; ++b) {
+            for (int c = b + 1; c < n; ++c) {
+                for (int d = c + 1; d < n; ++d) {
+                    combos.push_back({a, b, c, d});
+                }
+            }
+        }
+    }
+
+    #pragma omp parallel
+    {
+        int tid = 0;
+        #ifdef _OPENMP
+        tid = omp_get_thread_num();
+        #endif
+
+        auto& localTriplets = tripletsPerThread[tid];
+
+        #pragma omp for schedule(dynamic)
+        for (int idx = 0; idx < static_cast<int>(combos.size()); ++idx) {
+            const int a = combos[idx][0];
+            const int b = combos[idx][1];
+            const int c = combos[idx][2];
+            const int d = combos[idx][3];
+
+            double value = 0.0;
+
+            const double qabcd = qaby6.coeff(a * n + b, c * n + d);
+            const double qacbd = qaby6.coeff(a * n + c, b * n + d);
+            const double qadbc = qaby6.coeff(a * n + d, b * n + c);
+            const double qbcad = qaby6.coeff(b * n + c, a * n + d);
+            const double qbdac = qaby6.coeff(b * n + d, a * n + c);
+            const double qcdab = qaby6.coeff(c * n + d, a * n + b);
+
+            value += (qabcd - qacbd + qadbc + qbcad - qbdac + qcdab) / 6.0;
+
+            if (std::abs(value) < 1e-11) {
+                continue;
+            }
+
+            const int base[4] = {a, b, c, d};
+
+            for (int p = 0; p < 24; ++p) {
+                const int i = base[perm[p][0]];
+                const int j = base[perm[p][1]];
+                const int k = base[perm[p][2]];
+                const int l = base[perm[p][3]];
+
+                const int row = i * n + k;
+                const int col = j * n + l;
+
+                localTriplets.emplace_back(row, col, sign[p] * value);
+            }
+        }
+    }
+
+    // 合并 triplets
+    std::vector<Eigen::Triplet<double>> allTriplets;
+    size_t totalSize = 0;
+    for (const auto& v : tripletsPerThread) {
+        totalSize += v.size();
+    }
+    allTriplets.reserve(totalSize);
+
+    for (auto& v : tripletsPerThread) {
+        allTriplets.insert(allTriplets.end(), v.begin(), v.end());
+    }
+
+    // 批量构造稀疏矩阵；如果有重复项则自动求和
+    qbar.setFromTriplets(allTriplets.begin(), allTriplets.end(),
+                         [](const double& x, const double& y) { return x + y; });
+
+    qbar.makeCompressed();
+
+    return 0;
 }

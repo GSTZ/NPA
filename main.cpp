@@ -14,17 +14,18 @@ int main() {
     // single particle orbit file, collective pair file, structure coefficient file
     string spsFile, pairFile, scFileP, scFileN;
     int Z, N, interactionNumber, orbitPNumber, orbitNNumber, pairTypes, limitNumber;
-    vector<Orbit*> orbitProton, orbitNeutron;
+    vector<Orbit*> orbitP, orbitN;
     vector<InteractionFile*> interactionFiles;
     vector<Pair*> pairPs, pairNs;
     vector<PairLimit*> limits;
+    vector<int> Js;
 
     // a, b, c, d, J, T, value
     map<TBMEJ, map<pair<int, int>, double>> tbmeJMap, tbmePN, tbmePP, tbmeNN;
 
     // read input files
-    readInput(Z, N, spsFile, pairFile, scFileP, scFileN, interactionNumber, interactionFiles);
-    readSps(spsFile, orbitPNumber, orbitNNumber, orbitProton, orbitNeutron);
+    readInput(Z, N, spsFile, pairFile, scFileP, scFileN, interactionNumber, interactionFiles, Js);
+    readSps(spsFile, orbitPNumber, orbitNNumber, orbitP, orbitN);
 
     readPair(pairFile, pairTypes, pairPs, limitNumber, limits);
     readPair(pairFile, pairTypes, pairNs, limitNumber, limits);
@@ -32,8 +33,11 @@ int main() {
     readStructureCoefficient(scFileP, pairPs, pairTypes, orbitPNumber);
     readStructureCoefficient(scFileN, pairNs, pairTypes, orbitNNumber);
 
-    readInteraction(interactionFiles[0]->filename, orbitProton, orbitNeutron, tbmeJMap);
-    readInteraction(interactionFiles[1]->filename, orbitProton, orbitNeutron, tbmePN);
+    readInteraction(interactionFiles[0]->filename, orbitP, orbitN, tbmeJMap);
+    readInteraction(interactionFiles[1]->filename, orbitP, orbitN, tbmePN);
+
+    bool ZOdd = Z % 2 != 0;
+    bool NOdd = N % 2 != 0;
 
     auto end = std::chrono::high_resolution_clock::now();
 
@@ -61,11 +65,19 @@ int main() {
     vector<vector<int>> basesPM0, basesPM1, basesNM0, basesNM1;
 
     // generate orbits and bases
-    generateBasis(pairPs, Z / 2, basis, basesP, limits);
-    generateBasis(pairNs, N / 2, basis, basesN, limits);
+    vector<A0*> A0sP, A0sN;
+    if (ZOdd) generateA0s(orbitP, A0sP);
+    if (NOdd) generateA0s(orbitN, A0sN);
 
-    generateJi(pairPs, basesP, JisListP);
-    generateJi(pairNs, basesN, JisListN);
+    vector<P0*> P0sP, P0sN;
+    if (ZOdd) generateP0s(A0sP, P0sP);
+    if (NOdd) generateP0s(A0sN, P0sN);
+
+    generateBasis(pairPs, Z / 2, orbitP.size(), ZOdd, basis, basesP, limits);
+    generateBasis(pairNs, N / 2, orbitN.size(), NOdd, basis, basesN, limits);
+
+    generateJi(pairPs, A0sP, basesP, JisListP);
+    generateJi(pairNs, A0sN, basesN, JisListN);
 
     generateBasesJ(JisListP, basesP, basesJP);
     generateBasesJ(JisListN, basesN, basesJN);
@@ -73,14 +85,15 @@ int main() {
     //buildBlockJ(basesJP, blockJP);
     //buildBlockJ(basesJN, blockJN);
 
-    initializeOrbitM(orbitProton, orbitMProton);
-    initializeOrbitM(orbitNeutron, orbitMNeutron);
+    initializeOrbitM(orbitP, orbitMProton);
+    initializeOrbitM(orbitN, orbitMNeutron);
 
-    initializePairM(pairPs, orbitProton, orbitMProton, pairPMs, pairJMMapP);
-    initializePairM(pairNs, orbitNeutron, orbitMNeutron, pairNMs, pairJMMapN);
+    initializePairM(pairPs, orbitP, orbitMProton, pairPMs, pairJMMapP);
+    initializePairM(pairNs, orbitN, orbitMNeutron, pairNMs, pairJMMapN);
 
-    generateMBases(pairPs, pairPMs, Z / 2, basesP, pairJMMapP, basesPM0, basesPM1);
-    generateMBases(pairNs, pairNMs, N / 2, basesN, pairJMMapN, basesNM0, basesNM1);
+
+    generateMBases(pairPs, pairPMs, Z / 2, A0sP, P0sP, basesP, pairJMMapP, basesPM0, basesPM1);
+    generateMBases(pairNs, pairNMs, N / 2, A0sN, P0sN, basesN, pairJMMapN, basesNM0, basesNM1);
 
     end = std::chrono::high_resolution_clock::now();
 
@@ -95,11 +108,11 @@ int main() {
     overlapMN11;
 
     // calculate M-scheme overlap
-    overlapMScheme(pairPMs, basesPM0, orbitMProton.size(), overlapMP00);
-    overlapMScheme(pairNMs, basesNM0, orbitMProton.size(), overlapMN00);
+    overlapMScheme(pairPMs, basesPM0, ZOdd, P0sP, orbitMProton.size(), overlapMP00);
+    overlapMScheme(pairNMs, basesNM0, NOdd, P0sN, orbitMProton.size(), overlapMN00);
 
-    overlapMScheme(pairPMs, basesPM1, orbitMProton.size(), overlapMP11);
-    overlapMScheme(pairNMs, basesNM1, orbitMProton.size(), overlapMN11);
+    //if (!ZOdd) overlapMScheme(pairPMs, basesPM1, ZOdd, P0sP, orbitMProton.size(), overlapMP11);
+    //if (!NOdd) overlapMScheme(pairNMs, basesNM1, NOdd, P0sN, orbitMProton.size(), overlapMN11);
 
     end = std::chrono::high_resolution_clock::now();
 
@@ -113,17 +126,25 @@ int main() {
     Eigen::MatrixXd transformMatrixP0, transformMatrixN0, transformMatrixP1, transformMatrixN1;
 
     // calculate J-scheme overlap
-    transferMatrix(pairPs, pairPMs, basesJP, basesPM0, transformMatrixP0);
-    transferMatrix(pairNs, pairNMs, basesJN, basesNM0, transformMatrixN0);
+    transferMatrix(pairPs, pairPMs, A0sP, P0sP, basesJP, basesPM0, transformMatrixP0);
+    transferMatrix(pairNs, pairNMs, A0sN, P0sN, basesJN, basesNM0, transformMatrixN0);
 
-    transferMatrix(pairPs, pairPMs, basesJP, basesPM1, transformMatrixP1);
-    transferMatrix(pairNs, pairNMs, basesJN, basesNM1, transformMatrixN1);
+    if (!ZOdd) transferMatrix(pairPs, pairPMs, A0sP, P0sP, basesJP, basesPM1, transformMatrixP1);
+    if (!NOdd) transferMatrix(pairNs, pairNMs, A0sN, P0sN, basesJN, basesNM1, transformMatrixN1);
 
-    //removeUselessBasesJ(basesJP, transformMatrixP0, transformMatrixP1);
-    //removeUselessBasesJ(basesJN, transformMatrixN0, transformMatrixN1);
+    removeUselessBasesJ(basesJP, transformMatrixP0, transformMatrixP1);
+    removeUselessBasesJ(basesJN, transformMatrixN0, transformMatrixN1);
 
     buildBlockJ(basesJP, blockJP);
     buildBlockJ(basesJN, blockJN);
+
+    end = std::chrono::high_resolution_clock::now();
+
+    duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+
+    std::cout << "transfer matrix duration: " << duration.count() << " ms" << std::endl;
+
+    start = end;
     
     matrixElementMtoJ(overlapMP00, transformMatrixP0, transformMatrixP0, overlapJP);
     matrixElementMtoJ(overlapMN00, transformMatrixN0, transformMatrixN0, overlapJN);
@@ -144,7 +165,7 @@ int main() {
 
 
     // deal with interaction
-    interactionAntiSymmetric(tbmeJMap, orbitProton);
+    interactionAntiSymmetric(tbmeJMap, orbitP);
     interactionAntiSymmetricPN(tbmePN);
 
     end = std::chrono::high_resolution_clock::now();
@@ -160,13 +181,13 @@ int main() {
     Eigen::SparseMatrix<double> oaby6MatrixP, oaby6MatrixN;
     Eigen::MatrixXd qabMatrixP, qabMatrixN;
 
-    oaby6(orbitMProton.size(), orbitProton, orbitMProton,
-        orbitProton, orbitMProton, tbmeJMap, oaby6MatrixP);
-    oaby6(orbitMNeutron.size(), orbitNeutron, orbitMNeutron,
-        orbitNeutron, orbitMNeutron, tbmeJMap, oaby6MatrixN);
+    oaby6(orbitMProton.size(), orbitP, orbitMProton,
+        orbitP, orbitMProton, tbmeJMap, oaby6MatrixP);
+    oaby6(orbitMNeutron.size(), orbitN, orbitMNeutron,
+        orbitN, orbitMNeutron, tbmeJMap, oaby6MatrixN);
 
-    qab(orbitMProton.size(), orbitMProton, orbitProton, qabMatrixP);
-    qab(orbitMNeutron.size(), orbitMNeutron, orbitNeutron, qabMatrixN);
+    qab(orbitMProton.size(), orbitMProton, orbitP, qabMatrixP);
+    qab(orbitMNeutron.size(), orbitMNeutron, orbitN, qabMatrixN);
 
     end = std::chrono::high_resolution_clock::now();
 
@@ -187,11 +208,11 @@ int main() {
     initializeTwoDimVectors(basesPM0.size(), basesPM1.size(), fabPM10);
     initializeTwoDimVectors(basesNM0.size(), basesNM1.size(), fabNM10);
 
-    generateFabMap(pairPMs, basesPM0, basesPM0, orbitMProton.size(), fabPM00);
-    generateFabMap(pairNMs, basesNM0, basesNM0, orbitMNeutron.size(), fabNM00);
+    generateFabMap(pairPMs, P0sP, basesPM0, basesPM0, orbitMProton.size(), fabPM00);
+    generateFabMap(pairNMs, P0sN, basesNM0, basesNM0, orbitMNeutron.size(), fabNM00);
 
-    generateFabMap(pairPMs, basesPM0, basesPM1, orbitMProton.size(), fabPM10);
-    generateFabMap(pairNMs, basesNM0, basesNM1, orbitMNeutron.size(), fabNM10);
+    if (!ZOdd) generateFabMap(pairPMs, P0sP, basesPM0, basesPM1, orbitMProton.size(), fabPM10);
+    if (!NOdd) generateFabMap(pairNMs, P0sN, basesNM0, basesNM1, orbitMNeutron.size(), fabNM10);
 
     end = std::chrono::high_resolution_clock::now();
 
@@ -201,9 +222,9 @@ int main() {
 
     start = end;
 
-    calHamiltonianMatrix(pairPMs, basesPM0, orbitMProton.size(), fabPM00,
+    calHamiltonianMatrix(pairPMs, P0sP, basesPM0, orbitMProton.size(), fabPM00,
         oaby6MatrixP, qabMatrixP, hamMatrixMPP);
-    calHamiltonianMatrix(pairNMs, basesNM0, orbitMNeutron.size(), fabNM00,
+    calHamiltonianMatrix(pairNMs, P0sN, basesNM0, orbitMNeutron.size(), fabNM00,
         oaby6MatrixN, qabMatrixN, hamMatrixMNN);
 
     end = std::chrono::high_resolution_clock::now();
@@ -237,7 +258,6 @@ int main() {
 
     cout << eigenValues[0] << eigenValues[1] << endl;*/
 
-    vector<int> Js = {0, 4};
     vector<int> ts = {0, 2, 4, 6, 8, 10};
 
     vector<vector<Eigen::MatrixXd>> qPi, qNu;
@@ -250,7 +270,7 @@ int main() {
     vector<double> strengthVec;
     strengthVec.push_back(1.0);
 
-    getSVDResult(tbmePN, orbitProton, orbitNeutron, dims, ts, qPi, VIt, qNu, strengthVec);
+    getSVDResult(tbmePN, orbitP, orbitN, dims, ts, qPi, VIt, qNu, strengthVec);
 
     end = std::chrono::high_resolution_clock::now();
 
@@ -280,14 +300,14 @@ int main() {
     initializeTwoDimVectors(ts.size(), rank, reducedJMatrixP);
     initializeTwoDimVectors(ts.size(), rank, reducedJMatrixN);
 
-    qabtJtoM(orbitMProton, orbitProton, ts, rank, qPi, qabtMMatrixP);
-    qabtJtoM(orbitMNeutron, orbitNeutron, ts, rank, qNu, qabtMMatrixN);
+    qabtJtoM(orbitMProton, orbitP, ts, rank, qPi, qabtMMatrixP);
+    qabtJtoM(orbitMNeutron, orbitN, ts, rank, qNu, qabtMMatrixN);
 
     generateQMMatrix(basesPM0, basesPM0, qabtMMatrixP, fabPM00, qMMatrixP00);
     generateQMMatrix(basesNM0, basesNM0, qabtMMatrixN, fabNM00, qMMatrixN00);
 
-    generateQMMatrix(basesPM0, basesPM1, qabtMMatrixP, fabPM10, qMMatrixP01);
-    generateQMMatrix(basesNM0, basesNM1, qabtMMatrixN, fabNM10, qMMatrixN01);
+    if (!ZOdd) generateQMMatrix(basesPM0, basesPM1, qabtMMatrixP, fabPM10, qMMatrixP01);
+    if (!NOdd) generateQMMatrix(basesNM0, basesNM1, qabtMMatrixN, fabNM10, qMMatrixN01);
 
     auto loop1 = qMMatrixP00.size();
     auto loop2 = qMMatrixP00[0].size();
@@ -297,8 +317,8 @@ int main() {
             matrixElementMtoJ(qMMatrixP00[i][j], transformMatrixP0, transformMatrixP0, qJMatrixP00[i][j]);
             matrixElementMtoJ(qMMatrixN00[i][j], transformMatrixN0, transformMatrixN0, qJMatrixN00[i][j]);
 
-            matrixElementMtoJ(qMMatrixP01[i][j], transformMatrixP0, transformMatrixP1, qJMatrixP01[i][j]);
-            matrixElementMtoJ(qMMatrixN01[i][j], transformMatrixN0, transformMatrixN1, qJMatrixN01[i][j]);
+            if (!ZOdd) matrixElementMtoJ(qMMatrixP01[i][j], transformMatrixP0, transformMatrixP1, qJMatrixP01[i][j]);
+            if (!NOdd) matrixElementMtoJ(qMMatrixN01[i][j], transformMatrixN0, transformMatrixN1, qJMatrixN01[i][j]);
         }
     }
 

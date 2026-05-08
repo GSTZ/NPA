@@ -68,6 +68,8 @@ struct PairM {
 struct PairNew {
     Eigen::SparseMatrix<double, Eigen::RowMajor> pab; // structure coefficient
 
+    Eigen::VectorXd sa;
+
     ~PairNew() = default;
 };
 
@@ -112,12 +114,36 @@ struct State {
     vector<double> waveFunction;
 };
 
+
+struct A0 {
+    OddEven oe;
+    int index; // from 0
+    int j; // 2 * j
+    Parity parity;
+    Eigen::VectorXd yr0; // structure coefficient
+};
+
+
+
+struct P0 {
+    OddEven oe;
+    int index; // from 0
+    int indexJ;
+    int j; // 2 * j
+    int m; // 2 * m
+    Parity parity;
+    Eigen::VectorXd sa; // structure coefficient
+};
+
+
+
 int readSps(const string& filename, int& orbitProtonNumber, int& orbitNeutronNumber,
     vector<Orbit*>& orbitProton, vector<Orbit*>& orbitNeutron);
 
 int readInput(int& Z, int& N, string& spsFile, string& pairFile, string& scFileP, string& scFileN,
     int& interactionNumber,
-    vector<InteractionFile*>& interactionFiles);
+    vector<InteractionFile*>& interactionFiles,
+    vector<int>& Js);
 
 int readPair(const string& filename, int& pairTypes, vector<Pair*>& pairs, int& limitNumber,
     vector<PairLimit*>& limits);

@@ -20,12 +20,23 @@ void removeColumn(Eigen::MatrixXd& matrix, unsigned int colToRemove);
 
 void permuteWithSTL(vector<int>& nums, vector<vector<int>>& permutations);
 
-int generateBasis(const vector<Pair*>& pairs, const int& pairNumber, const vector<int>& basis,
-    vector<vector<int>>& bases, const vector<PairLimit*>& limits);
+int generateA0s(const vector<Orbit*>& orbits, vector<A0*>& A0s);
+
+int generateP0s(const vector<A0*>& A0s, vector<P0*>& P0s);
+
+int generateBasis(const vector<Pair*>& pairs,
+    const int& pairNumber,
+    const int orbitNumberJ,
+    const bool isOdd,
+    const vector<int>& basis,
+    vector<vector<int>>& bases,
+    const vector<PairLimit*>& limits);
 
 bool judgeBasis(const vector<PairLimit*>& limits, const vector<int>& basis);
 
-int generateJi(const vector<Pair*>& pairs, const vector<vector<int>>& bases,
+int generateJi(const vector<Pair*>& pairs,
+    const vector<A0*>& A0s,
+    const vector<vector<int>>& bases,
     vector<vector<vector<int>>>& JisList);
 
 int generateBasesJ(const vector<vector<vector<int>>>& JisList, const vector<vector<int>>& bases,
@@ -41,31 +52,67 @@ int initializeOrbitM(const vector<Orbit*>& orbits, vector<OrbitM*>& orbitMs);
 int initializePairM(const vector<Pair*>& pairs, const vector<Orbit*>& orbits,
     const vector<OrbitM*>& orbitMs, vector<PairM*>& pairMs, vector<vector<int>>& pairJMMap);
 
-int generateMBases(const vector<Pair*>& pairs, const vector<PairM*>& pairMs, const int& pairNumber,
-    const vector<vector<int>>& bases, const vector<vector<int>>& pairJMMap, vector<vector<int>>& basesM0,
+int generateMBases(const vector<Pair*>& pairs,
+    const vector<PairM*>& pairMs,
+    const int& pairNumber,
+    const vector<A0*>& A0s,
+    const vector<P0*>& P0s,
+    const vector<vector<int>>& bases,
+    const vector<vector<int>>& pairJMMap,
+    vector<vector<int>>& basesM0,
     vector<vector<int>>& basesM1);
 
-int generateMBasis(const vector<Pair*>& pairs, const vector<PairM*>& pairMs, const int& pairNumber,
-    const vector<int>& basis, const vector<int>& basisM, const vector<vector<int>>& pairJMMap,
-    vector<vector<int>>& basesM0, vector<vector<int>>& basesM1);
+int generateMBasis(const vector<Pair*>& pairs,
+    const vector<PairM*>& pairMs,
+    const int& pairNumber,
+    const bool isOdd,
+    const vector<A0*>& A0s,
+    const vector<P0*>& P0s,
+    const vector<int>& basisJ,
+    const vector<int>& basisM,
+    const vector<vector<int>>& pairJMMap,
+    vector<vector<int>>& basesM0,
+    vector<vector<int>>& basesM1);
 
-int judgeMBasis(const vector<PairM*>& pairMs, const vector<int>& basisM);
+int judgeMBasis(const vector<PairM*>& pairMs, const vector<int>& basisM, const int initialNumber);
 
-int generalMultiCommutator(const vector<PairNew*>& bra, const vector<PairNew*>& ket,
+int overlapMScheme(const std::vector<PairM*>& pairMs,
+                   const std::vector<std::vector<int>>& basesM,
+                   const bool isOdd,
+                   const vector<P0*>& P0s,
+                   const int orbitNumber,
+                   Eigen::MatrixXd& overlapMap);
+
+int generalMultiCommutator20(const vector<PairNew*>& bra, const vector<PairNew*>& ket,
     vector<Eigen::Product<Eigen::SparseMatrix<double, Eigen::RowMajor>, Eigen::SparseMatrix<double, Eigen::RowMajor>,
     Eigen::AliasFreeProduct>>& resultQ);
 
+int generalMultiCommutator110(const vector<PairNew*>& bra,
+    const vector<PairNew*>& ket,
+    vector<pair<Eigen::VectorXd, Eigen::SparseMatrix<double, Eigen::RowMajor>>>& resultAP);
+
 double overlapMSchemeOne(const vector<PairM*>& pairMs, const vector<int>& basisMBra,
-    const vector<int>& basisMKet, const int orbitNumber);
+    const vector<int>& basisMKet,
+    const bool isOdd,
+    const vector<P0*>& P0s,
+    const int orbitNumber);
+
+int taby(const vector<PairNew*>& bra,
+    const vector<PairNew*>& ket,
+    const int orbitNumber,
+    vector<Eigen::MatrixXd>& tbar);
+
+int BabByTaby(const vector<PairNew*>& bra,
+    const vector<PairNew*>& ket,
+    const Eigen::VectorXd& syPrime,
+    const int orbitNumber,
+    Eigen::SparseMatrix<double, Eigen::RowMajor>& Bab);
 
 int N2Qaby6(const vector<PairNew*>& bra, const vector<PairNew*>& ket, const int orbitNumber,
     Eigen::SparseMatrix<double, Eigen::RowMajor>& qbar);
 
 int N1Bab(const vector<PairNew*>& bra, const vector<PairNew*>& ket, const int orbitNumber,
     Eigen::SparseMatrix<double, Eigen::RowMajor>& qbar, Eigen::SparseMatrix<double, Eigen::RowMajor>& Bab);
-
-int overlapMScheme(const vector<PairM*>& pairMs, const vector<vector<int>>& basesM, const int orbitNumber,
-    Eigen::MatrixXd& overlapMap);
 
 int gramSchmidt(Eigen::MatrixXd& overlapMapJ,
     const vector<pair<int, int>>& blocks,
@@ -83,21 +130,40 @@ int removeUselessBasesJ(vector<vector<pair<int, int>>>& basesJ,
     Eigen::MatrixXd& transformMatrix0,
     Eigen::MatrixXd& transformMatrix1);
 
-int transferMatrix(const vector<Pair*>& pairs, const vector<PairM*>& pairMs,
-    const vector<vector<pair<int, int>>>& basesJ, const vector<vector<int>>& basisM,
+int transferMatrix(const vector<Pair*>& pairs,
+    const vector<PairM*>& pairMs,
+    const vector<A0*>& A0s,
+    const vector<P0*>& P0s,
+    const vector<vector<pair<int, int>>>& basesJ,
+    const vector<vector<int>>& basisM,
     Eigen::MatrixXd& transformMatrix);
 
-double transferMatrixJMOne(const vector<Pair*>& pairs, const vector<PairM*>& pairMs, const vector<int>& basis,
-    const vector<int>& jis, const vector<int>& basisM);
+double transferMatrixJMOne(const vector<Pair*>& pairs,
+    const vector<PairM*>& pairMs,
+    const vector<A0*>& A0s,
+    const vector<P0*>& P0s,
+    const vector<int>& basis,
+    const vector<int>& jis,
+    const vector<int>& basisM);
 
 double CgJ0JnrM0m1mn(const int J0, const int M0, const int r, const int start,
     const vector<int>& jis, vector<int>& mis);
 
-int gaby6(const vector<PairM*>& pairMs, const vector<int>& bra, const vector<int>& ket, const int orbitNumber,
-    Eigen::MatrixXd& gaby6Matrix, map<vector<int>, Eigen::SparseMatrix<double, Eigen::RowMajor>>& qbarMap);
+int gaby6(const vector<PairM*>& pairMs,
+    const vector<P0*>& P0s,
+    const vector<int>& bra,
+    const vector<int>& ket,
+    const int orbitNumber,
+    Eigen::MatrixXd& gaby6Matrix,
+    map<vector<int>, Eigen::SparseMatrix<double, Eigen::RowMajor>>& qbarMap);
 
-int fab(const vector<PairM*>& pairMs, const vector<int>& bra, const vector<int>& ket, const int orbitNumber,
-    Eigen::MatrixXd& fabMatrix, map<vector<int>, Eigen::SparseMatrix<double, Eigen::RowMajor>>& qbarMap);
+int fab(const vector<PairM*>& pairMs,
+    const vector<P0*>& P0s,
+    const vector<int>& bra,
+    const vector<int>& ket,
+    const int orbitNumber,
+    Eigen::MatrixXd& fabMatrix,
+    map<vector<int>, Eigen::SparseMatrix<double, Eigen::RowMajor>>& qbarMap);
 
 double reducedMatrixElement(const int& J, const int& JPrime, const int& M, const int& MPrime, const int& t,
     const int& u, const double& matrixElement);
@@ -119,9 +185,12 @@ int lanczos(Eigen::MatrixXd& matrix, vector<double>& eigenValues, vector<vector<
 
 int interactionAntiSymmetric(map<TBMEJ, map<pair<int, int>, double>>& imp, const vector<Orbit*>& orbits);
 
-int calHamiltonianMatrix(const vector<PairM*>& pairMs, const vector<vector<int>>& basesM, const int orbitNumber,
-    const vector<vector<Eigen::MatrixXd>>& fabMap,
-    Eigen::SparseMatrix<double>& oaby6Matrix,
+int calHamiltonianMatrix(const std::vector<PairM*>& pairMs,
+    const vector<P0*>& P0s,
+    const std::vector<std::vector<int>>& basesM,
+    const int orbitNumber,
+    const std::vector<std::vector<Eigen::MatrixXd>>& fabMap,
+    const Eigen::SparseMatrix<double>& oaby6Matrix,
     Eigen::MatrixXd& qabMatrix,
     Eigen::MatrixXd& hamMatrix);
 
@@ -142,6 +211,7 @@ int generateQMMatrix(const vector<vector<int>>& braBasesM,
     vector<vector<Eigen::MatrixXd>>& qMMatrix);
 
 int generateFabMap(const vector<PairM*>& pairMs,
+    const vector<P0*>& P0s,
     const vector<vector<int>>& basesMBra,
     const vector<vector<int>>& basesMKet,
     const int orbitNumber,
@@ -307,5 +377,10 @@ double calculateBM1(const vector<vector<pair<int, int>>>& basesJP,
     const Eigen::MatrixXd& reducedQopJP,
     const Eigen::MatrixXd& reducedQopJN);
 
+
+int N2Qaby6Odd(const vector<PairNew*>& bra,
+    const vector<PairNew*>& ket,
+    const int orbitNumber,
+    Eigen::SparseMatrix<double, Eigen::RowMajor>& qbar);
 
 #endif //INC_1_NPA_H
