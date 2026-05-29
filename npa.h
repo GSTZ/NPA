@@ -6,6 +6,8 @@
 #define INC_1_NPA_H
 #include <lambda_lanczos/lambda_lanczos.hpp>
 using lambda_lanczos::LambdaLanczos;
+using SpMat = Eigen::SparseMatrix<double, Eigen::RowMajor>;
+using ProductType = Eigen::Product<SpMat, SpMat, Eigen::AliasFreeProduct>;
 
 using namespace std;
 
@@ -81,38 +83,60 @@ int overlapMScheme(const std::vector<PairM*>& pairMs,
                    const bool isOdd,
                    const vector<P0*>& P0s,
                    const int orbitNumber,
+                   const int levelEnd,
+                   const vector<vector<PairNew*>>& preCalPairMs,
                    Eigen::MatrixXd& overlapMap);
 
-int generalMultiCommutator20(const vector<PairNew*>& bra, const vector<PairNew*>& ket,
-    vector<Eigen::Product<Eigen::SparseMatrix<double, Eigen::RowMajor>, Eigen::SparseMatrix<double, Eigen::RowMajor>,
-    Eigen::AliasFreeProduct>>& resultQ);
+int generalMultiCommutator20(const vector<PairNew*>& bra,
+    const vector<PairNew*>& ket,
+    const double coefficient,
+    const int levelEnd,
+    const vector<vector<PairNew*>>& preCalPairMs,
+    vector<pair<SpMat, SpMat>>& resultQ);
 
 int generalMultiCommutator110(const vector<PairNew*>& bra,
     const vector<PairNew*>& ket,
+    const double coefficient,
     vector<pair<Eigen::VectorXd, Eigen::SparseMatrix<double, Eigen::RowMajor>>>& resultAP);
 
-double overlapMSchemeOne(const vector<PairM*>& pairMs, const vector<int>& basisMBra,
+int generalMultiCommutator03(const vector<PairNew*>& bra,
+    const vector<PairNew*>& ket,
+    const double coefficient,
+    vector<pair<Eigen::VectorXd, pair<SpMat, SpMat>>>& resultAP);
+
+double overlapMSchemeOne(const vector<PairM*>& pairMs,
+    const vector<int>& basisMBra,
     const vector<int>& basisMKet,
     const bool isOdd,
     const vector<P0*>& P0s,
-    const int orbitNumber);
+    const int orbitNumber,
+    const int levelEnd,
+    const vector<vector<PairNew*>>& preCalPairMs);
 
 int taby(const vector<PairNew*>& bra,
     const vector<PairNew*>& ket,
     const int orbitNumber,
     vector<Eigen::MatrixXd>& tbar);
 
-int BabByTaby(const vector<PairNew*>& bra,
-    const vector<PairNew*>& ket,
+int BabByTaby(const vector<Eigen::MatrixXd>& tbar,
     const Eigen::VectorXd& syPrime,
     const int orbitNumber,
     Eigen::SparseMatrix<double, Eigen::RowMajor>& Bab);
 
-int N2Qaby6(const vector<PairNew*>& bra, const vector<PairNew*>& ket, const int orbitNumber,
+int N2Qaby6(const vector<PairNew*>& bra,
+    const vector<PairNew*>& ket,
+    const int orbitNumber,
+    const int levelEnd,
+    const vector<vector<PairNew*>>& preCalPairMs,
     Eigen::SparseMatrix<double, Eigen::RowMajor>& qbar);
 
-int N1Bab(const vector<PairNew*>& bra, const vector<PairNew*>& ket, const int orbitNumber,
-    Eigen::SparseMatrix<double, Eigen::RowMajor>& qbar, Eigen::SparseMatrix<double, Eigen::RowMajor>& Bab);
+int N1Bab(const std::vector<PairNew*>& bra,
+          const std::vector<PairNew*>& ket,
+          const int orbitNumber,
+          const int levelEnd,
+          const vector<vector<PairNew*>>& preCalPairMs,
+          Eigen::SparseMatrix<double, Eigen::RowMajor>& qbar,
+          Eigen::SparseMatrix<double, Eigen::RowMajor>& Bab);
 
 int gramSchmidt(Eigen::MatrixXd& overlapMapJ,
     const vector<pair<int, int>>& blocks,
@@ -154,6 +178,8 @@ int gaby6(const vector<PairM*>& pairMs,
     const vector<int>& bra,
     const vector<int>& ket,
     const int orbitNumber,
+    const int levelEnd,
+    const vector<vector<PairNew*>>& preCalPairMs,
     Eigen::MatrixXd& gaby6Matrix,
     map<vector<int>, Eigen::SparseMatrix<double, Eigen::RowMajor>>& qbarMap);
 
@@ -162,6 +188,8 @@ int fab(const vector<PairM*>& pairMs,
     const vector<int>& bra,
     const vector<int>& ket,
     const int orbitNumber,
+    const int levelEnd,
+    const vector<vector<PairNew*>>& preCalPairMs,
     Eigen::MatrixXd& fabMatrix,
     map<vector<int>, Eigen::SparseMatrix<double, Eigen::RowMajor>>& qbarMap);
 
@@ -189,6 +217,8 @@ int calHamiltonianMatrix(const std::vector<PairM*>& pairMs,
     const vector<P0*>& P0s,
     const std::vector<std::vector<int>>& basesM,
     const int orbitNumber,
+    const int levelEnd,
+    const vector<vector<PairNew*>>& preCalPairMs,
     const std::vector<std::vector<Eigen::MatrixXd>>& fabMap,
     const Eigen::SparseMatrix<double>& oaby6Matrix,
     Eigen::MatrixXd& qabMatrix,
@@ -215,6 +245,8 @@ int generateFabMap(const vector<PairM*>& pairMs,
     const vector<vector<int>>& basesMBra,
     const vector<vector<int>>& basesMKet,
     const int orbitNumber,
+    const int levelEnd,
+    const vector<vector<PairNew*>>& preCalPairMs,
     vector<vector<Eigen::MatrixXd>>& fabMap);
 
 double QPiDotQNuJM(const vector<int>& bra, const vector<int>& ket, // 0 Pi, 1 Nu, 2 J, 3 M
@@ -381,6 +413,14 @@ double calculateBM1(const vector<vector<pair<int, int>>>& basesJP,
 int N2Qaby6Odd(const vector<PairNew*>& bra,
     const vector<PairNew*>& ket,
     const int orbitNumber,
+    const int levelEnd,
+    const vector<vector<PairNew*>>& preCalPairMs,
     Eigen::SparseMatrix<double, Eigen::RowMajor>& qbar);
+
+
+int preCalculateNewPairs(const int level,
+    const int levelEnd,
+    const vector<PairM*>& pairs,
+    vector<vector<PairNew*>>& preCalPairMs);
 
 #endif //INC_1_NPA_H

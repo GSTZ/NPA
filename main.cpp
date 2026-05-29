@@ -12,10 +12,10 @@ int main() {
     auto start = std::chrono::high_resolution_clock::now();
 
     // single particle orbit file, collective pair file, structure coefficient file
-    string spsFile, pairFile, scFileP, scFileN;
-    int Z, N, interactionNumber, orbitPNumber, orbitNNumber, pairTypes, limitNumber;
-    vector<Orbit*> orbitP, orbitN;
-    vector<InteractionFile*> interactionFiles;
+    string spsFile, pairFile, scFileP, scFileN, interactionType;
+    int Z, N, orbitPNumber, orbitNNumber, pairTypes, limitNumber;
+    vector<Orbit*> orbitP, orbitN, nonsense;
+    vector<vector<InteractionFile*>> interactionFiles;
     vector<Pair*> pairPs, pairNs;
     vector<PairLimit*> limits;
     vector<int> Js;
@@ -24,7 +24,7 @@ int main() {
     map<TBMEJ, map<pair<int, int>, double>> tbmeJMap, tbmePN, tbmePP, tbmeNN;
 
     // read input files
-    readInput(Z, N, spsFile, pairFile, scFileP, scFileN, interactionNumber, interactionFiles, Js);
+    readInput(Z, N, spsFile, pairFile, scFileP, scFileN, interactionType, interactionFiles, Js);
     readSps(spsFile, orbitPNumber, orbitNNumber, orbitP, orbitN);
 
     readPair(pairFile, pairTypes, pairPs, limitNumber, limits);
@@ -33,8 +33,25 @@ int main() {
     readStructureCoefficient(scFileP, pairPs, pairTypes, orbitPNumber);
     readStructureCoefficient(scFileN, pairNs, pairTypes, orbitNNumber);
 
-    readInteraction(interactionFiles[0]->filename, orbitP, orbitN, tbmeJMap);
-    readInteraction(interactionFiles[1]->filename, orbitP, orbitN, tbmePN);
+    if (interactionType == "pn") {
+        for (auto& ifs : interactionFiles[0]) {
+            readInteraction(ifs->filename, orbitP, tbmePP);
+            interactionAntiSymmetric(tbmePP, orbitP);
+        }
+
+        for (auto& ifs : interactionFiles[1]) {
+            readInteraction(ifs->filename, orbitN, tbmeNN);
+            interactionAntiSymmetric(tbmeNN, orbitN);
+        }
+
+        for (auto& ifs : interactionFiles[2]) {
+            readInteraction(ifs->filename, nonsense, tbmePN);
+            interactionAntiSymmetricPN(tbmePN);
+        }
+    }
+
+    //readInteraction(interactionFiles[0]->filename, orbitP, orbitN, tbmeJMap);
+    //readInteraction(interactionFiles[1]->filename, orbitP, orbitN, tbmePN);
 
     bool ZOdd = Z % 2 != 0;
     bool NOdd = N % 2 != 0;
@@ -92,6 +109,15 @@ int main() {
     initializePairM(pairNs, orbitN, orbitMNeutron, pairNMs, pairJMMapN);
 
 
+    // prepare new pairs
+    vector<vector<PairNew*>> preCalPairPMs, preCalPairNMs;
+    const int levelEndP = 1;
+    const int levelEndN = 1;
+
+    preCalculateNewPairs(0, levelEndP, pairPMs, preCalPairPMs);
+    preCalculateNewPairs(0, levelEndN, pairNMs, preCalPairNMs);
+
+
     generateMBases(pairPs, pairPMs, Z / 2, A0sP, P0sP, basesP, pairJMMapP, basesPM0, basesPM1);
     generateMBases(pairNs, pairNMs, N / 2, A0sN, P0sN, basesN, pairJMMapN, basesNM0, basesNM1);
 
@@ -108,8 +134,8 @@ int main() {
     overlapMN11;
 
     // calculate M-scheme overlap
-    overlapMScheme(pairPMs, basesPM0, ZOdd, P0sP, orbitMProton.size(), overlapMP00);
-    overlapMScheme(pairNMs, basesNM0, NOdd, P0sN, orbitMProton.size(), overlapMN00);
+    overlapMScheme(pairPMs, basesPM0, ZOdd, P0sP, orbitMProton.size(), levelEndP, preCalPairPMs, overlapMP00);
+    overlapMScheme(pairNMs, basesNM0, NOdd, P0sN, orbitMNeutron.size(), levelEndN, preCalPairNMs, overlapMN00);
 
     //if (!ZOdd) overlapMScheme(pairPMs, basesPM1, ZOdd, P0sP, orbitMProton.size(), overlapMP11);
     //if (!NOdd) overlapMScheme(pairNMs, basesNM1, NOdd, P0sN, orbitMProton.size(), overlapMN11);
@@ -164,27 +190,14 @@ int main() {
     start = end;
 
 
-    // deal with interaction
-    interactionAntiSymmetric(tbmeJMap, orbitP);
-    interactionAntiSymmetricPN(tbmePN);
-
-    end = std::chrono::high_resolution_clock::now();
-
-    duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-
-    std::cout << "deal with interaction duration: " << duration.count() << " ms" << std::endl;
-
-    start = end;
-
-
     // calculate density matrix element
     Eigen::SparseMatrix<double> oaby6MatrixP, oaby6MatrixN;
     Eigen::MatrixXd qabMatrixP, qabMatrixN;
 
     oaby6(orbitMProton.size(), orbitP, orbitMProton,
-        orbitP, orbitMProton, tbmeJMap, oaby6MatrixP);
+        orbitP, orbitMProton, tbmePP, oaby6MatrixP);
     oaby6(orbitMNeutron.size(), orbitN, orbitMNeutron,
-        orbitN, orbitMNeutron, tbmeJMap, oaby6MatrixN);
+        orbitN, orbitMNeutron, tbmeNN, oaby6MatrixN);
 
     qab(orbitMProton.size(), orbitMProton, orbitP, qabMatrixP);
     qab(orbitMNeutron.size(), orbitMNeutron, orbitN, qabMatrixN);
@@ -208,11 +221,11 @@ int main() {
     initializeTwoDimVectors(basesPM0.size(), basesPM1.size(), fabPM10);
     initializeTwoDimVectors(basesNM0.size(), basesNM1.size(), fabNM10);
 
-    generateFabMap(pairPMs, P0sP, basesPM0, basesPM0, orbitMProton.size(), fabPM00);
-    generateFabMap(pairNMs, P0sN, basesNM0, basesNM0, orbitMNeutron.size(), fabNM00);
+    generateFabMap(pairPMs, P0sP, basesPM0, basesPM0, orbitMProton.size(), levelEndP, preCalPairPMs, fabPM00);
+    generateFabMap(pairNMs, P0sN, basesNM0, basesNM0, orbitMNeutron.size(), levelEndN, preCalPairNMs, fabNM00);
 
-    if (!ZOdd) generateFabMap(pairPMs, P0sP, basesPM0, basesPM1, orbitMProton.size(), fabPM10);
-    if (!NOdd) generateFabMap(pairNMs, P0sN, basesNM0, basesNM1, orbitMNeutron.size(), fabNM10);
+    if (!ZOdd) generateFabMap(pairPMs, P0sP, basesPM0, basesPM1, orbitMProton.size(), levelEndP, preCalPairPMs, fabPM10);
+    if (!NOdd) generateFabMap(pairNMs, P0sN, basesNM0, basesNM1, orbitMNeutron.size(), levelEndN, preCalPairNMs, fabNM10);
 
     end = std::chrono::high_resolution_clock::now();
 
@@ -222,9 +235,9 @@ int main() {
 
     start = end;
 
-    calHamiltonianMatrix(pairPMs, P0sP, basesPM0, orbitMProton.size(), fabPM00,
+    calHamiltonianMatrix(pairPMs, P0sP, basesPM0, orbitMProton.size(), levelEndP, preCalPairPMs, fabPM00,
         oaby6MatrixP, qabMatrixP, hamMatrixMPP);
-    calHamiltonianMatrix(pairNMs, P0sN, basesNM0, orbitMNeutron.size(), fabNM00,
+    calHamiltonianMatrix(pairNMs, P0sN, basesNM0, orbitMNeutron.size(), levelEndN, preCalPairNMs, fabNM00,
         oaby6MatrixN, qabMatrixN, hamMatrixMNN);
 
     end = std::chrono::high_resolution_clock::now();
@@ -252,13 +265,13 @@ int main() {
 
     lanczos(SRJBlocksP[0].second, eigenValues, eigenVectors);
 
-    cout << eigenValues[0] << eigenValues[1] << endl;
+    cout << SRJBlocksP[0].first << "   " <<  eigenValues[0] << "   " <<  eigenValues[1] << endl;
 
     lanczos(SRJBlocksP[1].second, eigenValues, eigenVectors);
 
-    cout << eigenValues[0] << eigenValues[1] << endl;*/
+    cout << SRJBlocksP[1].first << "   " <<  eigenValues[0] << "   " <<  eigenValues[1] << endl;*/
 
-    vector<int> ts = {0, 2, 4, 6, 8, 10};
+    vector<int> ts = {0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24};
 
     vector<vector<Eigen::MatrixXd>> qPi, qNu;
     vector<Eigen::MatrixXd> VIt;

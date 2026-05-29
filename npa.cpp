@@ -7,9 +7,7 @@
 #include <numeric>
 #include <ranges>
 #include <set>
-
-using SpMat = Eigen::SparseMatrix<double, Eigen::RowMajor>;
-using ProductType = Eigen::Product<SpMat, SpMat, Eigen::AliasFreeProduct>;
+#include <memory>
 
 struct IdxVal {
     int idx;
@@ -571,6 +569,8 @@ int overlapMScheme(const std::vector<PairM*>& pairMs,
                    const bool isOdd,
                    const vector<P0*>& P0s,
                    const int orbitNumber,
+                   const int levelEnd,
+                   const vector<vector<PairNew*>>& preCalPairMs,
                    Eigen::MatrixXd& overlapMap) {
     const int dim = static_cast<int>(basesM.size());
     overlapMap.resize(dim, dim);
@@ -597,7 +597,7 @@ int overlapMScheme(const std::vector<PairM*>& pairMs,
         const auto& basisMBra = basesM[i];
         const auto& basisMKet = basesM[j];
 
-        double overlap = overlapMSchemeOne(pairMs, basisMBra, basisMKet, isOdd, P0s, orbitNumber);
+        double overlap = overlapMSchemeOne(pairMs, basisMBra, basisMKet, isOdd, P0s, orbitNumber, levelEnd, preCalPairMs);
 
         overlapMap(i, j) = overlap;
         if (i != j) {
@@ -608,33 +608,50 @@ int overlapMScheme(const std::vector<PairM*>& pairMs,
     return 0;
 }
 
-double overlapMSchemeOne(const vector<PairM*>& pairMs, const vector<int>& basisMBra,
+double overlapMSchemeOne(const vector<PairM*>& pairMs,
+    const vector<int>& basisMBra,
     const vector<int>& basisMKet,
     const bool isOdd,
     const vector<P0*>& P0s,
-    const int orbitNumber) {
+    const int orbitNumber,
+    const int levelEnd,
+    const vector<vector<PairNew*>>& preCalPairMs) {
     double overlap = 0.0;
     vector<Eigen::Product<Eigen::SparseMatrix<double, Eigen::RowMajor>, Eigen::SparseMatrix<double, Eigen::RowMajor>,
     Eigen::AliasFreeProduct>> resultQ;
     vector<PairNew*> bra, ket;
 
     auto p0newBra = new PairNew();
-    if (isOdd) p0newBra->sa = P0s[basisMBra[0]]->sa;
-    else bra.push_back(p0newBra);
+    if (isOdd) {
+        p0newBra->first = -1;
+        p0newBra->sa = P0s[basisMBra[0]]->sa;
+    } else {
+        p0newBra->first = -2;
+        bra.push_back(p0newBra);
+    }
 
     auto p0newKet = new PairNew();
-    if (isOdd) p0newKet->sa = P0s[basisMKet[0]]->sa;
+    if (isOdd) {
+        p0newKet->first = -1;
+        p0newKet->sa = P0s[basisMKet[0]]->sa;
+    } else {
+        p0newKet->first = -2;
+    }
     ket.push_back(p0newKet);
 
     // bra and ket have the same length.
     for (int i = 1; i < basisMBra.size() - 1; i++) {
         auto pNewBra = new PairNew();
+        pNewBra->first = 0;
+        pNewBra->second = pairMs[basisMBra[i]]->index;
         pNewBra->pab = pairMs[basisMBra[i]]->pab;
         bra.push_back(pNewBra);
     }
 
     for (int i = 1; i < basisMKet.size(); i++) {
         auto pNewKet = new PairNew();
+        pNewKet->first = 0;
+        pNewKet->second = pairMs[basisMKet[i]]->index;
         pNewKet->pab = pairMs[basisMKet[i]]->pab;
         ket.push_back(pNewKet);
     }
@@ -642,10 +659,12 @@ double overlapMSchemeOne(const vector<PairM*>& pairMs, const vector<int>& basisM
     Eigen::SparseMatrix<double, Eigen::RowMajor> qbar;
     Eigen::SparseMatrix<double, Eigen::RowMajor> Bab(orbitNumber, orbitNumber);
 
-    if (!isOdd) N1Bab(bra, ket, orbitNumber, qbar, Bab);
+    if (!isOdd) N1Bab(bra, ket, orbitNumber, levelEnd, preCalPairMs, qbar, Bab);
     else {
         auto syPrime = P0s[basisMBra[0]]->sa;
-        BabByTaby(bra, ket, syPrime, orbitNumber, Bab);
+        vector<Eigen::MatrixXd> tbar;
+        taby(bra, ket, orbitNumber, tbar);
+        BabByTaby(tbar, syPrime, orbitNumber, Bab);
     }
 
     Eigen::SparseMatrix<double, Eigen::RowMajor> pnBn = pairMs[basisMBra.back()]->pab * Bab;
@@ -655,14 +674,10 @@ double overlapMSchemeOne(const vector<PairM*>& pairMs, const vector<int>& basisM
 }
 
 
-int BabByTaby(const vector<PairNew*>& bra,
-    const vector<PairNew*>& ket,
+int BabByTaby(const vector<Eigen::MatrixXd>& tbar,
     const Eigen::VectorXd& syPrime,
     const int orbitNumber,
     Eigen::SparseMatrix<double, Eigen::RowMajor>& Bab) {
-
-    vector<Eigen::MatrixXd> tbar;
-    taby(bra, ket, orbitNumber, tbar);
 
     for (int i = 0; i < orbitNumber; i++) {
         for (int j = 0; j < orbitNumber; j++) {
@@ -677,68 +692,80 @@ int BabByTaby(const vector<PairNew*>& bra,
 }
 
 
-int taby(const vector<PairNew*>& bra,
+int taby(
+    const vector<PairNew*>& bra,
     const vector<PairNew*>& ket,
     const int orbitNumber,
-    vector<Eigen::MatrixXd>& tbar) {
+    vector<Eigen::MatrixXd>& tbar
+) {
+    using DenseMat = Eigen::MatrixXd;
+    using DenseVec = Eigen::VectorXd;
+    using SparseMat = Eigen::SparseMatrix<double, Eigen::RowMajor>;
 
-    vector<pair<Eigen::VectorXd, Eigen::SparseMatrix<double, Eigen::RowMajor>>> resultAP;
+    vector<pair<DenseVec, SparseMat>> resultAP;
+    generalMultiCommutator110(bra, ket, 1.0, resultAP);
 
-    generalMultiCommutator110(bra, ket, resultAP);
+    tbar.clear();
+    tbar.resize(orbitNumber);
 
-    vector<Eigen::MatrixXd> taby;
-    for (int i = 0; i < orbitNumber; i++) {
-        Eigen::MatrixXd by;
-        by.resize(orbitNumber, orbitNumber);
-        by.setZero();
-        taby.push_back(by);
-
-        Eigen::MatrixXd by2;
-        by2.resize(orbitNumber, orbitNumber);
-        by2.setZero();
-        tbar.push_back(by2);
+    for (int i = 0; i < orbitNumber; ++i) {
+        tbar[i].setZero(orbitNumber, orbitNumber);
     }
 
-    for (int m = 0; m < resultAP.size(); m++) {
-        auto sa = resultAP[m].first;
-        auto pby = resultAP[m].second;
-        for (int i = 0; i < orbitNumber; i++) {
-            for (int j = 0; j < orbitNumber; j++) {
-                for (int k = 0; k < orbitNumber; k++) {
-                    taby[i](j, k) += sa(i) * pby.coeff(j, k);
+    const double factor = 1.0 / 3.0;
+
+    for (const auto& item : resultAP) {
+        const DenseVec& sa = item.first;
+        const SparseMat& pby = item.second;
+
+        for (int row = 0; row < pby.outerSize(); ++row) {
+            for (SparseMat::InnerIterator it(pby, row); it; ++it) {
+                const int a = it.row();
+                const int b = it.col();
+                const double value = it.value() * factor;
+
+                /*
+                    第一项和第二项：
+                    tbar[x](a, b) += sa[x] * value
+                    tbar[a](x, b) -= sa[x] * value
+
+                    当 x == a 时两项抵消，所以跳过 x == a。
+                */
+                for (int x = 0; x < orbitNumber; ++x) {
+                    if (x == a) {
+                        continue;
+                    }
+
+                    const double contrib = sa[x] * value;
+
+                    tbar[x](a, b) += contrib;
+                    tbar[a](x, b) -= contrib;
                 }
-            }
-        }
-    }
 
-
-    for (int a = 0; a < orbitNumber; ++a) {
-        for (int beta = 0; beta < orbitNumber; ++beta) {
-            for (int gamma = 0; gamma < orbitNumber; ++gamma) {
-                tbar[a](beta, gamma) =
-                    (1.0 / 3.0) *
-                    (
-                        taby[a](beta, gamma)
-                        - taby[beta](a, gamma)
-                        + taby[gamma](a, beta)
-                    );
+                /*
+                    第三项：
+                    tbar[a](b, x) += sa[x] * value
+                */
+                tbar[a].row(b).noalias() += value * sa.transpose();
             }
         }
     }
 
     return 0;
-
 }
+
 
 
 int N2Qaby6(const vector<PairNew*>& bra,
     const vector<PairNew*>& ket,
     const int orbitNumber,
+    const int levelEnd,
+    const vector<vector<PairNew*>>& preCalPairMs,
     Eigen::SparseMatrix<double, Eigen::RowMajor>& qbar) {
 
-    std::vector<ProductType> resultQ;
+    vector<pair<SpMat, SpMat>> resultQ;
 
-    generalMultiCommutator20(bra, ket, resultQ);
+    generalMultiCommutator20(bra, ket, 1.0, levelEnd, preCalPairMs, resultQ);
 
     const int n = orbitNumber;
     const int qSize = static_cast<int>(resultQ.size());
@@ -825,106 +852,73 @@ int N2Qaby6(const vector<PairNew*>& bra,
     std::vector<std::vector<PairNZ>> Rpairs(qSize);
 
     for (int m = 0; m < qSize; ++m) {
-        const SpMat& L = resultQ[m].lhs();
-        const SpMat& R = resultQ[m].rhs();
+        const SpMat& L = resultQ[m].first;
+        const SpMat& R = resultQ[m].second;
 
         Lpairs[m] = collectUpperNonZeros(L);
         Rpairs[m] = collectUpperNonZeros(R);
     }
 
-    int numThreads = 1;
-
-#ifdef _OPENMP
-    numThreads = omp_get_max_threads();
-#endif
-
-    // 每个线程一个 unordered_map，避免加锁
-    std::vector<std::unordered_map<std::uint64_t, double>> localMaps(numThreads);
-
     const long long numUnique =
         1LL * n * (n - 1) * (n - 2) * (n - 3) / 24;
 
-    for (int t = 0; t < numThreads; ++t) {
-        localMaps[t].reserve(
-            static_cast<size_t>(numUnique / numThreads + 1024)
-        );
-    }
-
-#pragma omp parallel
-    {
-        int tid = 0;
-
-#ifdef _OPENMP
-        tid = omp_get_thread_num();
-#endif
-
-        auto& localMap = localMaps[tid];
-
-        for (int m = 0; m < qSize; ++m) {
-            const auto& Llist = Lpairs[m];
-            const auto& Rlist = Rpairs[m];
-
-#pragma omp for schedule(dynamic)
-            for (int li = 0; li < static_cast<int>(Llist.size()); ++li) {
-                const auto& lp = Llist[li];
-
-                const int lx = lp.x;
-                const int ly = lp.y;
-                const double lv = lp.val;
-
-                for (const auto& rp : Rlist) {
-                    const int rx = rp.x;
-                    const int ry = rp.y;
-
-                    // 四个指标必须互不相同
-                    if (lx == rx || lx == ry || ly == rx || ly == ry) {
-                        continue;
-                    }
-
-                    std::array<int, 4> idx = {lx, ly, rx, ry};
-                    std::sort(idx.begin(), idx.end());
-
-                    const int a = idx[0];
-                    const int b = idx[1];
-                    const int c = idx[2];
-                    const int d = idx[3];
-
-                    int posX = -1;
-                    int posY = -1;
-
-                    for (int p = 0; p < 4; ++p) {
-                        if (idx[p] == lx) {
-                            posX = p;
-                        } else if (idx[p] == ly) {
-                            posY = p;
-                        }
-                    }
-
-                    const int mask = (1 << posX) | (1 << posY);
-                    const int sgn = getPairSign(mask);
-
-                    if (sgn == 0) {
-                        continue;
-                    }
-
-                    const double contrib = one_sixth * sgn * lv * rp.val;
-
-                    if (contrib != 0.0) {
-                        const std::uint64_t key = pack4(a, b, c, d);
-                        localMap[key] += contrib;
-                    }
-                }
-            }
-        }
-    }
-
-    // 合并每个线程的 map
+    // 非并行版本：直接使用一个 map 累加
     std::unordered_map<std::uint64_t, double> quadValue;
     quadValue.reserve(static_cast<size_t>(numUnique));
 
-    for (auto& mp : localMaps) {
-        for (auto& kv : mp) {
-            quadValue[kv.first] += kv.second;
+    for (int m = 0; m < qSize; ++m) {
+        const auto& Llist = Lpairs[m];
+        const auto& Rlist = Rpairs[m];
+
+        for (int li = 0; li < static_cast<int>(Llist.size()); ++li) {
+            const auto& lp = Llist[li];
+
+            const int lx = lp.x;
+            const int ly = lp.y;
+            const double lv = lp.val;
+
+            for (const auto& rp : Rlist) {
+                const int rx = rp.x;
+                const int ry = rp.y;
+
+                // 四个指标必须互不相同
+                if (lx == rx || lx == ry || ly == rx || ly == ry) {
+                    continue;
+                }
+
+                std::array<int, 4> idx = {lx, ly, rx, ry};
+                std::sort(idx.begin(), idx.end());
+
+                const int a = idx[0];
+                const int b = idx[1];
+                const int c = idx[2];
+                const int d = idx[3];
+
+                int posX = -1;
+                int posY = -1;
+
+                for (int p = 0; p < 4; ++p) {
+                    if (idx[p] == lx) {
+                        posX = p;
+                    } else if (idx[p] == ly) {
+                        posY = p;
+                    }
+                }
+
+                const int mask = (1 << posX) | (1 << posY);
+                const int sgn = getPairSign(mask);
+
+                if (sgn == 0) {
+                    continue;
+                }
+
+                const double contrib = one_sixth * sgn * lv * rp.val;
+
+                if (contrib != 0.0) {
+                    const std::uint64_t key = pack4(a, b, c, d);
+                    quadValue[key] += contrib;
+                }
+            }
         }
     }
 
@@ -989,14 +983,15 @@ int N2Qaby6(const vector<PairNew*>& bra,
 int N1Bab(const std::vector<PairNew*>& bra,
           const std::vector<PairNew*>& ket,
           const int orbitNumber,
+          const int levelEnd,
+          const vector<vector<PairNew*>>& preCalPairMs,
           Eigen::SparseMatrix<double, Eigen::RowMajor>& qbar,
-          Eigen::SparseMatrix<double, Eigen::RowMajor>& Bab)
-{
+          Eigen::SparseMatrix<double, Eigen::RowMajor>& Bab) {
     auto pN1 = bra.back()->pab;
     auto braNext = bra;
     braNext.pop_back();
 
-    if (!(qbar.size() > 0)) N2Qaby6(braNext, ket, orbitNumber, qbar);
+    if (!(qbar.size() > 0)) N2Qaby6(braNext, ket, orbitNumber, levelEnd, preCalPairMs, qbar);
 
     const int n = orbitNumber;
     Bab.resize(n, n);
@@ -1062,73 +1057,87 @@ int N1Bab(const std::vector<PairNew*>& bra,
 
 int generalMultiCommutator20(const vector<PairNew*>& bra,
     const vector<PairNew*>& ket,
-    std::vector<ProductType>& resultQ) {
+    const double coefficient,
+    const int levelEnd,
+    const vector<vector<PairNew*>>& preCalPairMs,
+    vector<pair<SpMat, SpMat>>& resultQ) {
+
     const int N = static_cast<int>(ket.size());
     const int NI = static_cast<int>(bra.size());
 
+    if (abs(coefficient) < 1e-11) {
+        return 0;
+    }
+
     // recursion end
     if (NI == 1 && N == 3) {
-        auto Q = ket[1]->pab * ket[2]->pab;
-        resultQ.emplace_back(Q);
+        resultQ.emplace_back(coefficient * ket[1]->pab, ket[2]->pab);
         return 0;
     }
 
     auto pnPrime = bra.back();
 
+    auto braNext = bra;
+    braNext.pop_back();
+
     // 第一类 contraction
+    vector<pair<double, vector<PairNew*>>> kets;
     for (int k = 1; k < N; k++) {
-        auto braNext = bra;
-        braNext.pop_back();
 
         auto ketNext = ket;
 
-        if (k != N - 1) {
-            // contract the trace to P_N
-            auto pn = ketNext.back();
-            auto pk = ketNext[k];
+        auto pk = ketNext[k];
 
-            ketNext.pop_back();
-            ketNext.erase(ketNext.begin() + k);
+        ketNext.erase(ketNext.begin() + k);
 
-            auto Pk = new PairNew();
+        double tr;
 
-            // 原来：
-            // Eigen::SparseMatrix<double> pTem = pk->pab * pnPrime->pab;
-            // Pk->pab = -2 * sparseTrace(pTem) * pn->pab;
+        double coefficientNext;
 
-            const double tr = sparseTraceProduct(pk->pab, pnPrime->pab);
-            Pk->pab = (-2.0 * tr) * pn->pab;
-            Pk->pab.prune(1e-11);
+        if (ket[0]->first == -1) {
+            tr = sparseTraceProduct(pk->pab, pnPrime->pab);
+            coefficientNext = -2.0 * tr * coefficient;
+            kets.emplace_back(coefficientNext, ketNext);
+            continue;
+        }
 
-            ketNext.push_back(Pk);
+        bool flag1 = false;
+        for (auto& ks : kets) {
+            bool flag2 = true;
+            for (int m = 1; m < ks.second.size(); m++) {
+                if (ks.second[m]->first != ketNext[m]->first
+                    || ks.second[m]->second != ketNext[m]->second
+                    || ketNext[m]->second == -1) {
+                    flag2 = false;
+                    break;
+                }
+            }
+            if (flag2) {
+                tr = sparseTraceProduct(pk->pab, pnPrime->pab);
+                coefficientNext = -2.0 * tr * coefficient;
+                ks.first += coefficientNext;
+                flag1 = true;
+                break;
+            }
+        }
 
-            generalMultiCommutator20(braNext, ketNext, resultQ);
-
-        } else {
-            // contract the trace to P_{N-1} when k = N
-            auto pnk = ketNext.back();
-            ketNext.pop_back();
-
-            auto pnMinus1 = ketNext.back();
-            ketNext.pop_back();
-
-            auto Pk = new PairNew();
-
-            const double tr = sparseTraceProduct(pnk->pab, pnPrime->pab);
-            Pk->pab = (-2.0 * tr) * pnMinus1->pab;
-            Pk->pab.prune(1e-11);
-
-            ketNext.push_back(Pk);
-
-            generalMultiCommutator20(braNext, ketNext, resultQ);
+        if (!flag1) {
+            tr = sparseTraceProduct(pk->pab, pnPrime->pab);
+            coefficientNext = -2.0 * tr * coefficient;
+            kets.emplace_back(coefficientNext, ketNext);
         }
     }
 
+    for (int k = 0; k < kets.size(); k++) {
+        auto ketNext = kets[k].second;
+
+        generalMultiCommutator20(braNext, ketNext, kets[k].first, levelEnd, preCalPairMs, resultQ);
+    }
+
     // 第二类 contraction
+    vector<pair<double, vector<PairNew*>>> kets2;
     for (int k = 1; k < N; k++) {
         for (int i = 1; i < k; i++) {
-            auto braNext = bra;
-            braNext.pop_back();
 
             auto ketNext = ket;
 
@@ -1136,29 +1145,118 @@ int generalMultiCommutator20(const vector<PairNew*>& bra,
             auto pi = ketNext[i];
 
             auto Pik = new PairNew();
+            const int level = pi->first + pk->first + 1;
+            Pik->first = level;
 
             // i < k，所以 erase 顺序不能反
             ketNext.erase(ketNext.begin() + k);
             ketNext.erase(ketNext.begin() + i);
 
-            // 原来：
-            // Pik->pab = 4 * (pk->pab * pnPrime->pab * pi->pab
-            //              + pi->pab * pnPrime->pab * pk->pab);
-
-            SpMat leftTmp = pk->pab * pnPrime->pab;
-            SpMat left = leftTmp * pi->pab;
-
-            SpMat rightTmp = pi->pab * pnPrime->pab;
-            SpMat right = rightTmp * pk->pab;
-
-            Pik->pab = 4.0 * (left + right);
-            Pik->pab.prune(1e-11);
-            Pik->pab.makeCompressed();
-
             ketNext.push_back(Pik);
 
-            generalMultiCommutator20(braNext, ketNext, resultQ);
+            if (level < 100 && ket[0]->first != -1) {
+                bool flag1 = false;
+                for (auto& ks : kets2) {
+                    bool flag2 = true;
+                    for (int m = 1; m < ks.second.size() - 1; m++) {
+                        if (ks.second[m]->first != ketNext[m]->first
+                        || ks.second[m]->second != ketNext[m]->second
+                        || ketNext[m]->second == -1) {
+                            flag2 = false;
+                            break;
+                        }
+                    }
+                    if (flag2) {
+                        //cout << level;
+                        ks.first += coefficient;
+                        flag1 = true;
+                        break;
+                    }
+                }
+
+                if (!flag1) {
+                    // only level == 1 now
+                    if (level == 1) {
+                        const auto n0 = preCalPairMs[0].size();
+                        long long beta = pnPrime->second * n0 * n0 + pi->second * n0 + pk->second;
+                        /*if (pi->second < pk->second) {
+                            beta = pnPrime->second * n0 * n0 + pi->second * n0 + pk->second;
+                        } else {
+                            beta = pnPrime->second * n0 * n0 + pk->second * n0 + pi->second;
+                        }*/
+                        Pik->second = beta;
+                        Pik->pab = preCalPairMs[Pik->first][Pik->second]->pab;
+                    } else if (level == 2) {
+                        const auto n0 = preCalPairMs[0].size();
+                        const auto n1 = preCalPairMs[1].size();
+                        long long beta;
+                        if (pi->first == 1) {
+                            beta = pnPrime->second * n0 * n1 + pk->second * n1 + pi->second;
+                        } else {
+                            beta = pnPrime->second * n0 * n1 + pi->second * n1 + pk->second;
+                        }
+                        //if (pi->second < pk->second) {
+                        //    beta = pnPrime->second * n0 * n0 + pk->second * n0 + pi->second;
+                        //}
+                        Pik->second = beta;
+                        Pik->pab = preCalPairMs[Pik->first][Pik->second]->pab;
+                    } else {
+                        SpMat leftTmp = pk->pab * pnPrime->pab;
+                        SpMat left = leftTmp * pi->pab;
+
+                        SpMat rightTmp = pi->pab * pnPrime->pab;
+                        SpMat right = rightTmp * pk->pab;
+
+                        Pik->pab = 4.0 * (left + right);
+                        Pik->pab.prune(1e-11);
+                        Pik->pab.makeCompressed();
+
+                        if (level == 3) {
+                            const auto n0 = preCalPairMs[0].size();
+                            const auto n1 = preCalPairMs[1].size();
+                            const auto n2 = preCalPairMs[2].size();
+                            if (pi->first == 1) {
+                                if (pi->second < pk->second) {
+                                    Pik->second = n0 * n0 * n2 + pnPrime->second * n1 * n1 + pi->second * n1 + pk->second;
+                                } else {
+                                    Pik->second = n0 * n0 * n2 + pnPrime->second * n1 * n1 + pk->second * n1 + pi->second;
+                                }
+                            } else if (pk->first == 2) {
+                                Pik->second = pnPrime->second * n0 * n2 + pi->second * n2 + pk->second;
+                            } else {
+                                Pik->second = pnPrime->second * n0 * n2 + pk->second * n2 + pi->second;
+                            }
+                        } else {
+                            Pik->second = -1;
+                        }
+                    }
+
+                    ketNext.pop_back();
+                    ketNext.push_back(Pik);
+                    kets2.emplace_back(coefficient, ketNext);
+                }
+            } else {
+                SpMat leftTmp = pk->pab * pnPrime->pab;
+                SpMat left = leftTmp * pi->pab;
+
+                SpMat rightTmp = pi->pab * pnPrime->pab;
+                SpMat right = rightTmp * pk->pab;
+
+                Pik->pab = 4.0 * (left + right);
+                Pik->pab.prune(1e-11);
+                Pik->pab.makeCompressed();
+
+                ketNext.pop_back();
+                ketNext.push_back(Pik);
+                kets2.emplace_back(coefficient, ketNext);
+            }
         }
+    }
+
+    for (int k = 0; k < kets2.size(); k++) {
+        auto ketNext = kets2[k].second;
+
+        generalMultiCommutator20(braNext, ketNext, kets2[k].first, levelEnd, preCalPairMs, resultQ);
     }
 
     return 0;
@@ -1167,46 +1265,29 @@ int generalMultiCommutator20(const vector<PairNew*>& bra,
 
 int generalMultiCommutator110(const vector<PairNew*>& bra,
     const vector<PairNew*>& ket,
+    const double coefficient,
     vector<pair<Eigen::VectorXd, Eigen::SparseMatrix<double, Eigen::RowMajor>>>& resultAP) {
     auto N = ket.size();
     auto NI = bra.size();
+
+    if (abs(coefficient) < 1e-11) {
+        return 0;
+    }
+
     // recursion end
     if (NI == 0 && N == 2) {
-        resultAP.emplace_back(ket[0]->sa, ket[1]->pab);
+        resultAP.emplace_back(coefficient * ket[0]->sa, ket[1]->pab);
     } else {
         for (int k = 1; k < N; k++) {
-            if (k != N - 1) { // contract the trace to P_{N}
-                auto braNext = bra;
-                auto pnPrime = braNext.back();
-                braNext.pop_back();
-                auto ketNext = ket;
-                auto pn = ketNext.back();
-                auto pk = ketNext[k];
-                ketNext.pop_back();
-                ketNext.erase(ketNext.begin() + k);
-                auto Pk = new PairNew();
-                Eigen::SparseMatrix<double> pTem = pk->pab * pnPrime->pab;
-                Pk->pab = -2 * sparseTrace(pTem) * pn->pab;
-                ketNext.push_back(Pk);
-                generalMultiCommutator110(braNext, ketNext, resultAP);
-            } else { // contract the trace to P_{N-1} when k = N
-                auto braNext = bra;
-                auto pnPrime = braNext.back();
-                braNext.pop_back();
-                auto ketNext = ket;
-                auto pnk = ketNext.back();
-                ketNext.pop_back();
-                auto pnMinus1 = ketNext.back();
-                ketNext.pop_back();
-                auto Pk = new PairNew();
-                if (pnk->pab.rows() != pnPrime->pab.cols()) {
-                    pnk->pab = pnPrime->pab;
-                }
-                Eigen::SparseMatrix<double> pTem = pnk->pab * pnPrime->pab;
-                Pk->pab = -2 * sparseTrace(pTem) * pnMinus1->pab;
-                ketNext.push_back(Pk);
-                generalMultiCommutator110(braNext, ketNext, resultAP);
-            }
+            auto braNext = bra;
+            auto pnPrime = braNext.back();
+            braNext.pop_back();
+            auto ketNext = ket;
+            auto pk = ketNext[k];
+            ketNext.erase(ketNext.begin() + k);
+            Eigen::SparseMatrix<double> pTem = pk->pab * pnPrime->pab;
+            double coefficientNext = coefficient * -2 * sparseTrace(pTem);
+            generalMultiCommutator110(braNext, ketNext, coefficientNext, resultAP);
         }
         for (int k = 1; k < N; k++) {
             for (int i = 1; i < k; i++) {
@@ -1221,8 +1302,10 @@ int generalMultiCommutator110(const vector<PairNew*>& bra,
                 ketNext.erase(ketNext.begin() + k);
                 ketNext.erase(ketNext.begin() + i);
                 Pik->pab = 4 * (pk->pab * pnPrime->pab * pi->pab + pi->pab * pnPrime->pab * pk->pab);
+                Pik->pab.prune(1e-11);
+                Pik->pab.makeCompressed();
                 ketNext.push_back(Pik);
-                generalMultiCommutator110(braNext, ketNext, resultAP);
+                generalMultiCommutator110(braNext, ketNext, coefficient, resultAP);
             }
         }
         for (int k = 1; k < N; k++) {
@@ -1238,7 +1321,72 @@ int generalMultiCommutator110(const vector<PairNew*>& bra,
             auto sk = new PairNew();
             sk->sa = 4 * pk->pab * pnPrime->pab * p0->sa;
             ketNext.insert(ketNext.begin(), sk);
-            generalMultiCommutator110(braNext, ketNext, resultAP);
+            generalMultiCommutator110(braNext, ketNext, coefficient, resultAP);
+        }
+    }
+    return 0;
+}
+
+
+int generalMultiCommutator03(const vector<PairNew*>& bra,
+    const vector<PairNew*>& ket,
+    const double coefficient,
+    vector<pair<Eigen::VectorXd, pair<SpMat, SpMat>>>& resultAP) {
+
+    if (abs(coefficient) < 1e-11) {
+        return 0;
+    }
+
+    auto N = ket.size();
+    auto NI = bra.size();
+    // recursion end
+    if (NI == 1 && N == 3) {
+        resultAP.push_back({coefficient * ket[0]->sa, {ket[1]->pab, ket[2]->pab}});
+    } else {
+        for (int k = 1; k < N; k++) {
+            auto braNext = bra;
+            auto pnPrime = braNext.back();
+            braNext.pop_back();
+            auto ketNext = ket;
+            auto pk = ketNext[k];
+            ketNext.erase(ketNext.begin() + k);
+            Eigen::SparseMatrix<double> pTem = pk->pab * pnPrime->pab;
+            double coefficientNext = coefficient * -2 * sparseTrace(pTem);
+            generalMultiCommutator03(braNext, ketNext, coefficientNext, resultAP);
+        }
+        for (int k = 1; k < N; k++) {
+            for (int i = 1; i < k; i++) {
+                auto braNext = bra;
+                auto pnPrime = braNext.back();
+                braNext.pop_back();
+                auto ketNext = ket;
+                auto pk = ketNext[k];
+                auto pi = ketNext[i];
+                auto Pik = new PairNew();
+                // i < k, so erase sequence can not be changed.
+                ketNext.erase(ketNext.begin() + k);
+                ketNext.erase(ketNext.begin() + i);
+                Pik->pab = 4 * (pk->pab * pnPrime->pab * pi->pab + pi->pab * pnPrime->pab * pk->pab);
+                Pik->pab.prune(1e-11);
+                Pik->pab.makeCompressed();
+                ketNext.push_back(Pik);
+                generalMultiCommutator03(braNext, ketNext, coefficient, resultAP);
+            }
+        }
+        for (int k = 1; k < N; k++) {
+            auto braNext = bra;
+            auto pnPrime = braNext.back();
+            braNext.pop_back();
+            auto ketNext = ket;
+            auto p0 = ketNext[0];
+            auto pk = ketNext[k];
+            // careful about the erase sequence
+            ketNext.erase(ketNext.begin() + k);
+            ketNext.erase(ketNext.begin());
+            auto sk = new PairNew();
+            sk->sa = 4 * pk->pab * pnPrime->pab * p0->sa;
+            ketNext.insert(ketNext.begin(), sk);
+            generalMultiCommutator03(braNext, ketNext, coefficient, resultAP);
         }
     }
     return 0;
@@ -1309,7 +1457,7 @@ int gramSchmidt(Eigen::MatrixXd& overlapMapJ,
                 }
             }
 
-            if (norm_k_sq < 1e-8) {
+            if (norm_k_sq < 1e-1) {
                 //cerr << "Warning: Found near-zero vector at k=" << k << ", possibly due to linear dependence.\n";
                 invalidIndices.push_back(k);
                 continue;
@@ -1495,6 +1643,8 @@ int gaby6(const vector<PairM*>& pairMs,
     const vector<int>& bra,
     const vector<int>& ket,
     const int orbitNumber,
+    const int levelEnd,
+    const vector<vector<PairNew*>>& preCalPairMs,
     Eigen::MatrixXd& gaby6Matrix,
     map<vector<int>, Eigen::SparseMatrix<double, Eigen::RowMajor>>& qbarMap) {
 
@@ -1505,127 +1655,178 @@ int gaby6(const vector<PairM*>& pairMs,
 
     bool isOdd = bra[0] != -1;
 
-    // ============================================================
-    // isOdd == true：保持你的原代码逻辑不动
-    // ============================================================
-
     if (isOdd) {
-        vector<PairNew*> ketNext;
+        using RowMat = Eigen::Matrix<double, Eigen::Dynamic,
+                                     Eigen::Dynamic, Eigen::RowMajor>;
 
-        auto p0newKet = new PairNew();
-        p0newKet->sa = P0s[ket[0]]->sa;
-        ketNext.push_back(p0newKet);
+        const int N  = orbitNumber;
+        const int N2 = N * N;
 
-        for (int i = 1; i < ket.size(); i++) {
-            auto pw = new PairNew();
-            pw->pab = pairMs[ket[i]]->pab;
-            ketNext.push_back(pw);
+        // ============================================================
+        // ketNext 只构造一次（用 unique_ptr 防泄漏）
+        // ============================================================
+        std::vector<std::unique_ptr<PairNew>> ketStorage;
+        std::vector<PairNew*> ketNext;
+        ketStorage.reserve(ket.size());
+        {
+            auto p0 = std::make_unique<PairNew>();
+            p0->first = -1;
+            p0->sa    = P0s[ket[0]]->sa;
+            ketNext.push_back(p0.get());
+            ketStorage.push_back(std::move(p0));
+
+            for (size_t i = 1; i < ket.size(); ++i) {
+                auto pw = std::make_unique<PairNew>();
+                pw->first  = 0;
+                pw->second = pairMs[ket[i]]->index;
+                pw->pab    = pairMs[ket[i]]->pab;
+                ketNext.push_back(pw.get());
+                ketStorage.push_back(std::move(pw));
+            }
         }
 
-        for (int i = 1; i < bra.size(); i++) {
+        // ============================================================
+        // Part 1 ：单粒子去除 i
+        //   原 5 重循环 → 一次 GEMM + 两次 block 加法
+        // ============================================================
+        for (size_t i = 1; i < bra.size(); ++i) {
             auto braTem = bra;
             braTem.erase(braTem.begin() + i);
-            auto Pk = pairMs[bra[i]];
 
-            vector<PairNew*> braNext;
-            auto p0newBra = new PairNew();
-            p0newBra->sa = P0s[bra[0]]->sa;
+            const auto& Pk_sp = pairMs[bra[i]]->pab;
 
-            for (int j = 1; j < braTem.size(); j++) {
-                auto pw = new PairNew();
+            // braNext
+            std::vector<std::unique_ptr<PairNew>> braStorage;
+            std::vector<PairNew*> braNext;
+            braStorage.reserve(braTem.size());
+            for (size_t j = 1; j < braTem.size(); ++j) {
+                auto pw = std::make_unique<PairNew>();
                 pw->pab = pairMs[braTem[j]]->pab;
-                braNext.push_back(pw);
+                braNext.push_back(pw.get());
+                braStorage.push_back(std::move(pw));
             }
 
-            Eigen::SparseMatrix<double, Eigen::RowMajor> qbar;
-            Eigen::SparseMatrix<double, Eigen::RowMajor> Bab(orbitNumber, orbitNumber);
+            const auto& sPrime = P0s[bra[0]]->sa;   // 长度 N
 
-            auto syPrime = P0s[bra[0]]->sa;
-            BabByTaby(braNext, ketNext, syPrime, orbitNumber, Bab);
+            std::vector<Eigen::MatrixXd> tbar;
+            Eigen::SparseMatrix<double, Eigen::RowMajor> Bab(N, N);
+            taby(braNext, ketNext, N, tbar);
+            BabByTaby(tbar, sPrime, N, Bab);
 
-            for (int alpha = 0; alpha < orbitNumber; ++alpha) {
-                for (int beta = 0; beta < orbitNumber; ++beta) {
-                    const auto pkab = 4.0 * Pk->pab.coeff(alpha, beta);
-                    gaby6Matrix.block(alpha * orbitNumber, beta * orbitNumber,
-                                      orbitNumber, orbitNumber) += pkab * Bab;
+            // 物化为稠密，避免 coeff() 反复查询
+            const Eigen::MatrixXd Pk(Pk_sp);
+            const Eigen::MatrixXd Bd(Bab);
+
+            // ---- (a) gaby6.block(α*N, β*N) += 4 * Pk(α,β) * Bd ----
+            for (int a = 0; a < N; ++a) {
+                for (int b = 0; b < N; ++b) {
+                    gaby6Matrix.block(a * N, b * N, N, N).noalias()
+                        += (4.0 * Pk(a, b)) * Bd;
                 }
             }
 
-            auto sPrime = P0s[bra[0]]->sa;
-            vector<Eigen::MatrixXd> tbar;
-
-            taby(braNext, ketNext, orbitNumber, tbar);
-
-            for (int alpha = 0; alpha < orbitNumber; ++alpha) {
-                for (int beta = 0; beta < orbitNumber; ++beta) {
-                    for (int gamma = 0; gamma < orbitNumber; ++gamma) {
-                        for (int delta = 0; delta < orbitNumber; ++delta) {
-                            for (int alphaPrime = 0; alphaPrime < orbitNumber; ++alphaPrime) {
-                                gaby6Matrix(alpha * orbitNumber + gamma, beta * orbitNumber + delta) +=
-                                    12.0 * (sPrime(alpha) * Pk->pab.coeff(beta, alphaPrime)
-                                    - sPrime(beta) * Pk->pab.coeff(alpha, alphaPrime))
-                                    * tbar[alphaPrime](gamma, delta);
-                            }
-                        }
+            // ---- (b) Tflat (RowMajor)：行 = α'，列 = γ*N+δ ----
+            //         Tflat(α', γ*N+δ) = tbar[α'](γ, δ)
+            RowMat Tflat(N, N2);
+            for (int ap = 0; ap < N; ++ap) {
+                for (int g = 0; g < N; ++g) {
+                    for (int d = 0; d < N; ++d) {
+                        Tflat(ap, g * N + d) = tbar[ap](g, d);
                     }
                 }
             }
+
+            // U(r, γ*N+δ) = Σ_{α'} Pk(r, α') * Tflat(α', γ*N+δ)
+            RowMat U(N, N2);
+            U.noalias() = Pk * Tflat;
+
+            // ---- (c) G[α*N+γ, β*N+δ] += 12*( s'_α U(β,γ,δ) - s'_β U(α,γ,δ) ) ----
+            // U.row(r).data() 因为 RowMajor 是连续 N² 个 double，可安全 reshape 成 RowMajor N×N
+            for (int a = 0; a < N; ++a) {
+                Eigen::Map<const RowMat> Ua_mat(U.row(a).data(), N, N);
+                for (int b = 0; b < N; ++b) {
+                    Eigen::Map<const RowMat> Ub_mat(U.row(b).data(), N, N);
+
+                    gaby6Matrix.block(a * N, b * N, N, N).noalias()
+                        += (12.0 * sPrime(a)) * Ub_mat
+                        -  (12.0 * sPrime(b)) * Ua_mat;
+                }
+            }
         }
 
-        for (int k = 1; k < bra.size(); k++) {
-            for (int i = 1; i < k; i++) {
-                auto Pi = pairMs[bra[i]];
-                auto Pk = pairMs[bra[k]];
+        // ============================================================
+        // Part 2 ：双粒子去除 (i, k)
+        //   一次扫描 qbar 的非零元，按 (γ,δ) 分桶 → 稠密 GEMM
+        // ============================================================
+        for (size_t k = 1; k < bra.size(); ++k) {
+            for (size_t i = 1; i < k; ++i) {
+                const auto& Pk_sp = pairMs[bra[k]]->pab;
+                const auto& Pi_sp = pairMs[bra[i]]->pab;
 
                 auto braTem = bra;
                 braTem.erase(braTem.begin() + k);
                 braTem.erase(braTem.begin() + i);
 
-                vector<PairNew*> braNext;
-                auto p0newBra = new PairNew();
-                p0newBra->sa = P0s[bra[0]]->sa;
-                braNext.push_back(p0newBra);
-
-                for (int j = 1; j < braTem.size(); j++) {
-                    auto pw = new PairNew();
-                    pw->pab = pairMs[braTem[j]]->pab;
-                    braNext.push_back(pw);
+                std::vector<std::unique_ptr<PairNew>> braStorage;
+                std::vector<PairNew*> braNext;
+                {
+                    auto p0 = std::make_unique<PairNew>();
+                    p0->sa = P0s[bra[0]]->sa;
+                    braNext.push_back(p0.get());
+                    braStorage.push_back(std::move(p0));
+                    for (size_t j = 1; j < braTem.size(); ++j) {
+                        auto pw = std::make_unique<PairNew>();
+                        pw->pab = pairMs[braTem[j]]->pab;
+                        braNext.push_back(pw.get());
+                        braStorage.push_back(std::move(pw));
+                    }
                 }
 
                 Eigen::SparseMatrix<double, Eigen::RowMajor> qbar;
+                N2Qaby6Odd(braNext, ketNext, N, levelEnd, preCalPairMs, qbar);
 
-                N2Qaby6Odd(braNext, ketNext, orbitNumber, qbar);
+                // ---- 一次扫描 qbar，按 (γ,δ) 分桶 ----
+                // qAB[γ*N+δ](α,β) = qbar(α*N+γ, β*N+δ)，过滤 |v|>1e-11（与原码一致）
+                std::vector<RowMat> qAB(N2, RowMat::Zero(N, N));
+                std::vector<char>   nonEmpty(N2, 0);
 
-                const int n = orbitNumber;
-                const auto& PkMat = Pk->pab;
-                const auto& PiMat = Pi->pab;
+                for (int row = 0; row < qbar.outerSize(); ++row) {
+                    for (Eigen::SparseMatrix<double, Eigen::RowMajor>::InnerIterator
+                             it(qbar, row); it; ++it) {
+                        const double v = it.value();
+                        if (std::abs(v) <= 1e-11) continue;
 
-                for (int gamma = 0; gamma < n; ++gamma) {
-                    for (int delta = 0; delta < n; ++delta) {
-                        std::vector<Eigen::Triplet<double>> triplets;
-                        triplets.reserve(n * n / 10);
+                        const int r = it.row(), c = it.col();
+                        const int alpha = r / N, gamma = r % N;
+                        const int beta  = c / N, delta = c % N;
 
-                        for (int alpha = 0; alpha < n; ++alpha) {
-                            for (int beta = 0; beta < n; ++beta) {
-                                double val = qbar.coeff(alpha * n + gamma, beta * n + delta);
-                                if (std::abs(val) > 1e-11) {
-                                    triplets.emplace_back(alpha, beta, val);
+                        qAB[gamma * N + delta](alpha, beta) += v;
+                        nonEmpty[gamma * N + delta] = 1;
+                    }
+                }
+
+                // 稠密化 Pk, Pi 一次
+                const Eigen::MatrixXd Pk(Pk_sp);
+                const Eigen::MatrixXd Pi(Pi_sp);
+
+                for (int gamma = 0; gamma < N; ++gamma) {
+                    for (int delta = 0; delta < N; ++delta) {
+                        const int idx = gamma * N + delta;
+                        if (!nonEmpty[idx]) continue;
+
+                        const RowMat& Q = qAB[idx];
+
+                        // Sab = 96 * (Pk*Q*Pi + Pi*Q*Pk)
+                        Eigen::MatrixXd Sab = 96.0 * (Pk * Q * Pi + Pi * Q * Pk);
+
+                        // 写回：gaby6Matrix(α*N+γ, β*N+δ) += Sab(α,β)
+                        for (int a = 0; a < N; ++a) {
+                            const int rowG = a * N + gamma;
+                            for (int b = 0; b < N; ++b) {
+                                const double v = Sab(a, b);
+                                if (v != 0.0) {
+                                    gaby6Matrix(rowG, b * N + delta) += v;
                                 }
-                            }
-                        }
-
-                        if (triplets.empty()) continue;
-
-                        Eigen::SparseMatrix<double, Eigen::RowMajor> qbarAB(n, n);
-                        qbarAB.setFromTriplets(triplets.begin(), triplets.end());
-
-                        Eigen::SparseMatrix<double, Eigen::RowMajor> Sab =
-                            PkMat * qbarAB * PiMat + PiMat * qbarAB * PkMat;
-                        Sab *= 96.0;
-
-                        for (int x = 0; x < Sab.outerSize(); ++x) {
-                            for (Eigen::SparseMatrix<double, Eigen::RowMajor>::InnerIterator it(Sab, x); it; ++it) {
-                                gaby6Matrix(it.row() * n + gamma, it.col() * n + delta) += it.value();
                             }
                         }
                     }
@@ -1635,6 +1836,7 @@ int gaby6(const vector<PairM*>& pairMs,
 
         return 0;
     }
+
 
     // ============================================================
     // isOdd == false：优化版本
@@ -1652,11 +1854,14 @@ int gaby6(const vector<PairM*>& pairMs,
     ketNext.reserve(ket.size());
 
     auto p0newKet = makePairNew();
+    p0newKet->first = -2;
     ketNext.push_back(p0newKet);
 
     for (int i = 1; i < static_cast<int>(ket.size()); i++) {
         auto pw = makePairNew();
         pw->pab = pairMs[ket[i]]->pab;
+        pw->first = 0;
+        pw->second = pairMs[ket[i]]->index;
         ketNext.push_back(pw);
     }
 
@@ -1699,6 +1904,8 @@ int gaby6(const vector<PairM*>& pairMs,
         for (int j = 1; j < static_cast<int>(braTem.size()); j++) {
             auto pw = makePairNew();
             pw->pab = pairMs[braTem[j]]->pab;
+            pw->first = 0;
+            pw->second = pairMs[braTem[j]]->index;
             braNext.push_back(pw);
         }
 
@@ -1712,7 +1919,7 @@ int gaby6(const vector<PairM*>& pairMs,
         auto [it, inserted] = qbarMap.try_emplace(bt2);
         Eigen::SparseMatrix<double, Eigen::RowMajor>& qbarRef = it->second;
 
-        N1Bab(braNext, ketNext, n, qbarRef, Bab);
+        N1Bab(braNext, ketNext, n, levelEnd, preCalPairMs, qbarRef, Bab);
 
         addScaledKronSparseToDense(
             gaby6Matrix,
@@ -1753,6 +1960,8 @@ int gaby6(const vector<PairM*>& pairMs,
             for (int j = 1; j < static_cast<int>(braTem.size()); j++) {
                 auto pw = makePairNew();
                 pw->pab = pairMs[braTem[j]]->pab;
+                pw->first = 0;
+                pw->second = pairMs[braTem[j]]->index;
                 braNext.push_back(pw);
             }
 
@@ -1761,7 +1970,7 @@ int gaby6(const vector<PairM*>& pairMs,
             Eigen::SparseMatrix<double, Eigen::RowMajor>& qbarRef = it->second;
 
             if (qbarRef.size() == 0) {
-                N2Qaby6(braNext, ketNext, n, qbarRef);
+                N2Qaby6(braNext, ketNext, n, levelEnd, preCalPairMs, qbarRef);
             }
 
             const SparseAccess& PkAcc = getAccess(bra[k]);
@@ -1788,6 +1997,8 @@ int fab(const vector<PairM*>& pairMs,
     const vector<int>& bra,
     const vector<int>& ket,
     const int orbitNumber,
+    const int levelEnd,
+    const vector<vector<PairNew*>>& preCalPairMs,
     Eigen::MatrixXd& fabMatrix,
     map<vector<int>, Eigen::SparseMatrix<double, Eigen::RowMajor>>& qbarMap) {
     fabMatrix.resize(orbitNumber, orbitNumber);
@@ -1797,12 +2008,19 @@ int fab(const vector<PairM*>& pairMs,
     bool isOdd = bra[0] != -1;
 
     auto p0newKet = new PairNew();
-    if (isOdd) p0newKet->sa = P0s[ket[0]]->sa;
+    if (isOdd) {
+        p0newKet->first = -3;
+        p0newKet->sa = P0s[ket[0]]->sa;
+    } else {
+        p0newKet->first = -2;
+    }
     ketNext.push_back(p0newKet);
 
     for (int i = 1; i < ket.size(); i++) {
         auto pw = new PairNew();
         pw->pab = pairMs[ket[i]]->pab;
+        pw->first = 0;
+        pw->second = pairMs[ket[i]]->index;
         ketNext.push_back(pw);
     }
 
@@ -1813,12 +2031,19 @@ int fab(const vector<PairM*>& pairMs,
 
         vector<PairNew*> braNext;
         auto p0newBra = new PairNew();
-        if (isOdd) p0newBra->sa = P0s[bra[0]]->sa;
-        else braNext.push_back(p0newBra);
+        if (isOdd) {
+            p0newBra->first = -3;
+            p0newBra->sa = P0s[bra[0]]->sa;
+        } else {
+            p0newBra->first = -2;
+            braNext.push_back(p0newBra);
+        }
 
         for (int j = 1; j < braTem.size(); j++) {
             auto pw = new PairNew();
             pw->pab = pairMs[braTem[j]]->pab;
+            pw->first = 0;
+            pw->second = pairMs[braTem[j]]->index;
             braNext.push_back(pw);
         }
         Eigen::SparseMatrix<double, Eigen::RowMajor> qbar;
@@ -1830,13 +2055,15 @@ int fab(const vector<PairM*>& pairMs,
             //sort(bt2.begin(), bt2.end());
             if (qbarMap.contains(bt2)) qbar = qbarMap[bt2];
 
-            N1Bab(braNext, ketNext, orbitNumber, qbar, Bab);
+            N1Bab(braNext, ketNext, orbitNumber, levelEnd, preCalPairMs, qbar, Bab);
             fabMatrix += 4 * Pk->pab * Bab.transpose();
 
             qbarMap[bt2] = qbar;
         } else {
             auto syPrime = P0s[bra[0]]->sa;
-            BabByTaby(braNext, ketNext, syPrime, orbitNumber, Bab);
+            vector<Eigen::MatrixXd> tbar;
+            taby(braNext, ketNext, orbitNumber, tbar);
+            BabByTaby(tbar, syPrime, orbitNumber, Bab);
             fabMatrix += 4 * Pk->pab * Bab.transpose();
         }
     }
@@ -2165,6 +2392,8 @@ int calHamiltonianMatrix(const std::vector<PairM*>& pairMs,
     const vector<P0*>& P0s,
     const std::vector<std::vector<int>>& basesM,
     const int orbitNumber,
+    const int levelEnd,
+    const vector<vector<PairNew*>>& preCalPairMs,
     const std::vector<std::vector<Eigen::MatrixXd>>& fabMap,
     const Eigen::SparseMatrix<double>& oaby6Matrix,
     Eigen::MatrixXd& qabMatrix,
@@ -2205,7 +2434,7 @@ int calHamiltonianMatrix(const std::vector<PairM*>& pairMs,
             const auto& basisMBra = basesM[i];
 
             Eigen::MatrixXd gaby6Matrix;
-            gaby6(pairMs, P0s, basisMBra, basisMKet, orbitNumber, gaby6Matrix, qbarMap);
+            gaby6(pairMs, P0s, basisMBra, basisMKet, orbitNumber, levelEnd, preCalPairMs, gaby6Matrix, qbarMap);
 
             const Eigen::MatrixXd& fabMatrix = fabMap[i][j];
 
@@ -2216,6 +2445,7 @@ int calHamiltonianMatrix(const std::vector<PairM*>& pairMs,
                 element += entry.value * gaby6Matrix(entry.row, entry.col);
             }
             element /= 4.0;
+            //element = 0.0;
 
             // fab 与 qab 的逐元素内积
             element += (fabMatrix.array() * qabMatrix.array()).sum();
@@ -2598,6 +2828,8 @@ int generateFabMap(const vector<PairM*>& pairMs,
     const vector<vector<int>>& basesMBra,
     const vector<vector<int>>& basesMKet,
     const int orbitNumber,
+    const int levelEnd,
+    const vector<vector<PairNew*>>& preCalPairMs,
     vector<vector<Eigen::MatrixXd>>& fabMap) {
 
     int dim1 = basesMBra.size();
@@ -2610,7 +2842,7 @@ int generateFabMap(const vector<PairM*>& pairMs,
         for (int i = 0; i < dim1; i++) {
             Eigen::MatrixXd fabMatrix;
             const auto& basisMBra = basesMBra[i];
-            fab(pairMs, P0s, basisMBra, basisMKet, orbitNumber, fabMatrix, qbarMap);
+            fab(pairMs, P0s, basisMBra, basisMKet, orbitNumber, levelEnd, preCalPairMs, fabMatrix, qbarMap);
             fabMap[i][j] = fabMatrix;
         }
     }
@@ -3271,25 +3503,35 @@ double calculateBM1(const vector<vector<pair<int, int>>>& basesJP,
 }
 
 
-int N2Qaby6Odd(const vector<PairNew*>& bra,
-    const vector<PairNew*>& ket,
+int N2Qaby6Odd(
+    const std::vector<PairNew*>& bra,
+    const std::vector<PairNew*>& ket,
     const int orbitNumber,
-    Eigen::SparseMatrix<double, Eigen::RowMajor>& qbar) {
+    const int levelEnd,
+    const std::vector<std::vector<PairNew*>>& preCalPairMs,
+    Eigen::SparseMatrix<double, Eigen::RowMajor>& qbar
+) {
+    using Vec = Eigen::VectorXd;
+    using Mat = Eigen::MatrixXd;
+    using Triplet = Eigen::Triplet<double>;
 
-    vector<Eigen::Product<Eigen::SparseMatrix<double, Eigen::RowMajor>, Eigen::SparseMatrix<double, Eigen::RowMajor>,
-    Eigen::AliasFreeProduct>> resultQ;
+    const Vec& sPrime = bra[0]->sa;
 
-    generalMultiCommutator20(bra, ket, resultQ);
-
+    std::vector<std::pair<Eigen::VectorXd, std::pair<SpMat, SpMat>>> resultQ;
+    generalMultiCommutator03(bra, ket, 1.0, resultQ);
 
     const int n = orbitNumber;
-    const int qSize = static_cast<int>(resultQ.size());
     const int dim = n * n;
-    const double one_sixth = 1.0 / 6.0;
+    const int qSize = static_cast<int>(resultQ.size());
 
     qbar.resize(dim, dim);
+    qbar.setZero();
 
-    // 24 个排列，以及对应奇偶性
+    if (n < 4 || qSize == 0) {
+        qbar.makeCompressed();
+        return 0;
+    }
+
     static const int perm[24][4] = {
         {0,1,2,3}, {0,1,3,2}, {0,2,1,3}, {0,2,3,1},
         {0,3,1,2}, {0,3,2,1}, {1,0,2,3}, {1,0,3,2},
@@ -3304,137 +3546,213 @@ int N2Qaby6Odd(const vector<PairNew*>& bra,
         +1,-1,-1,+1,+1,-1,-1,+1,+1,-1,-1,+1
     };
 
-    // 预缓存 lhs/rhs 指针，避免反复 resultQ[m].lhs()/rhs()
-    std::vector<const Eigen::SparseMatrix<double>*> Ls(qSize);
-    std::vector<const Eigen::SparseMatrix<double>*> Rs(qSize);
+    struct CacheItem {
+        const Vec* s = nullptr;
+
+        Mat L;
+        Mat R;
+
+        double alpha = 0.0;
+
+        Vec LsPrime;
+        Vec LtSPrime;
+        Vec RsPrime;
+        Vec RtSPrime;
+    };
+
+    std::vector<CacheItem> cache(qSize);
+
     for (int m = 0; m < qSize; ++m) {
-        Ls[m] = std::vector<const Eigen::SparseMatrix<double> *>::value_type(&resultQ[m].lhs());
-        Rs[m] = std::vector<const Eigen::SparseMatrix<double> *>::value_type(&resultQ[m].rhs());
+        const Vec& s = resultQ[m].first;
+        const SpMat& Ls = resultQ[m].second.first;
+        const SpMat& Rs = resultQ[m].second.second;
+
+        cache[m].s = &s;
+
+        cache[m].L = Mat(Ls);
+        cache[m].R = Mat(Rs);
+
+        cache[m].alpha = sPrime.dot(s);
+
+        cache[m].LsPrime.noalias() = Ls * sPrime;
+        cache[m].LtSPrime.noalias() = Ls.transpose() * sPrime;
+
+        cache[m].RsPrime.noalias() = Rs * sPrime;
+        cache[m].RtSPrime.noalias() = Rs.transpose() * sPrime;
     }
 
-    auto s = ket[0]->sa;
-    auto sPrime = bra[0]->sa;
+    auto calcOne = [](const CacheItem& item,
+                      const int a,
+                      const int b,
+                      const int c,
+                      const int d) -> double {
+        const Vec& s = *item.s;
 
-    Eigen::MatrixXd qaby6;
+        const double Lab = item.L(a, b);
+        const double Rcd = item.R(c, d);
+        const double Lcd = item.L(c, d);
 
-    qaby6.resize(n * n, n * n);
-    qaby6.setZero();
+        if (Lab == 0.0 && Rcd == 0.0 && Lcd == 0.0) {
+            return 0.0;
+        }
 
-    for (int m = 0; m < qSize; ++m) {
-        const auto& L = *Ls[m];
-        const auto& R = *Rs[m];
-        Eigen::MatrixXd tem1 = s * sPrime.transpose() * L + L * sPrime * s.transpose();
-        Eigen::MatrixXd tem2 = s * sPrime.transpose() * R + R * sPrime * s.transpose();
-        for (int a = 0; a < n; ++a) {
-            for (int b = 0; b < n; ++b) {
-                for (int c = 0; c < n; ++c) {
-                    for (int d = 0; d < n; ++d) {
-                        const int row = a * n + b;
-                        const int col = c * n + d;
-                        qaby6(row, col) += (sPrime.transpose() * s)(0) * L.coeff(a, b) * R.coeff(c, d)
-                                    - tem1(a, b) * R.coeff(c, d)
-                                    - tem2(a, b) * L.coeff(c, d);
+        const double tem1_ab =
+            s(a) * item.LtSPrime(b)
+            + item.LsPrime(a) * s(b);
+
+        const double tem2_ab =
+            s(a) * item.RtSPrime(b)
+            + item.RsPrime(a) * s(b);
+
+        return item.alpha * Lab * Rcd
+             - tem1_ab * Rcd
+             - tem2_ab * Lcd;
+    };
+
+    const long long numUnique =
+        1LL * n * (n - 1) * (n - 2) * (n - 3) / 24;
+
+    std::vector<Triplet> triplets;
+    triplets.reserve(static_cast<size_t>(numUnique * 24));
+
+    constexpr double eps = 1e-11;
+    constexpr double one_sixth = 1.0 / 6.0;
+
+    for (int a = 0; a < n - 3; ++a) {
+        for (int b = a + 1; b < n - 2; ++b) {
+            for (int c = b + 1; c < n - 1; ++c) {
+                for (int d = c + 1; d < n; ++d) {
+
+                    double qabcd = 0.0;
+                    double qacbd = 0.0;
+                    double qadbc = 0.0;
+                    double qbcad = 0.0;
+                    double qbdac = 0.0;
+                    double qcdab = 0.0;
+
+                    for (int m = 0; m < qSize; ++m) {
+                        const CacheItem& item = cache[m];
+
+                        qabcd += calcOne(item, a, b, c, d);
+                        qacbd += calcOne(item, a, c, b, d);
+                        qadbc += calcOne(item, a, d, b, c);
+                        qbcad += calcOne(item, b, c, a, d);
+                        qbdac += calcOne(item, b, d, a, c);
+                        qcdab += calcOne(item, c, d, a, b);
+                    }
+
+                    const double value =
+                        (qabcd - qacbd + qadbc + qbcad - qbdac + qcdab)
+                        * one_sixth;
+
+                    if (std::abs(value) < eps) {
+                        continue;
+                    }
+
+                    const int base[4] = {a, b, c, d};
+
+                    for (int p = 0; p < 24; ++p) {
+                        const int i = base[perm[p][0]];
+                        const int j = base[perm[p][1]];
+                        const int k = base[perm[p][2]];
+                        const int l = base[perm[p][3]];
+
+                        const int row = i * n + k;
+                        const int col = j * n + l;
+
+                        triplets.emplace_back(row, col, sign[p] * value);
                     }
                 }
             }
         }
     }
 
-    // 每个线程一个 triplet 容器，避免锁竞争
-    int numThreads = 1;
-    #ifdef _OPENMP
-    numThreads = omp_get_max_threads();
-    #endif
+    qbar.setFromTriplets(
+        triplets.begin(),
+        triplets.end(),
+        [](const double& x, const double& y) {
+            return x + y;
+        }
+    );
 
-    std::vector<std::vector<Eigen::Triplet<double>>> tripletsPerThread(numThreads);
+    qbar.makeCompressed();
 
-    // 粗略预留一下空间：
-    // 每个独立四元组最多产生 24 个非零
-    // 独立四元组数量是 C(n,4)
-    const long long numUnique =
-        (n >= 4) ? (1LL * n * (n - 1) * (n - 2) * (n - 3) / 24) : 0LL;
+    return 0;
+}
 
-    for (int t = 0; t < numThreads; ++t) {
-        tripletsPerThread[t].reserve(static_cast<size_t>(numUnique * 24 / numThreads + 1024));
-    }
 
-    std::vector<std::array<int, 4>> combos;
-    combos.reserve((n >= 4) ? (1LL * n * (n - 1) * (n - 2) * (n - 3) / 24) : 0);
 
-    for (int a = 0; a < n; ++a) {
-        for (int b = a + 1; b < n; ++b) {
-            for (int c = b + 1; c < n; ++c) {
-                for (int d = c + 1; d < n; ++d) {
-                    combos.push_back({a, b, c, d});
+
+int preCalculateNewPairs(const int level,
+    const int levelEnd,
+    const vector<PairM*>& pairs,
+    vector<vector<PairNew*>>& preCalPairMs) {
+
+    if (level == 0) {
+        vector<PairNew*> vpn;
+        for (const auto& pair : pairs) {
+            PairNew* pn = new PairNew();
+            pn->first = 0;
+            pn->second = pair->index;
+            pn->pab = pair->pab;
+            vpn.push_back(pn);
+        }
+        preCalPairMs.push_back(vpn);
+        preCalculateNewPairs(level + 1, levelEnd, pairs, preCalPairMs);
+    } else if (level == levelEnd) {
+        return 0;
+    } else if (level == 1) {
+        const int n0 = pairs.size();
+        vector<PairNew*> vpn;
+        vpn.resize(n0 * n0 * n0);
+        for (const auto& pni : pairs) {
+            for (const auto& pnj : preCalPairMs[0]) {
+                for (const auto& pnk : preCalPairMs[0]) {
+                    PairNew* pn = new PairNew();
+                    pn->first = 1;
+                    //if (pnj->second >= pnk->second) {
+                    //    pn->second = pni->index * n0 * n0 + pnk->second * n0 + pnj->second;
+                    //} else {
+                    //    pn->second = pni->index * n0 * n0 + pnj->second * n0 + pnk->second;
+                    //}
+                    pn->second = pni->index * n0 * n0 + pnj->second * n0 + pnk->second;
+                    pn->pab = 4 * (pnj->pab * pni->pab * pnk->pab + pnk->pab * pni->pab * pnj->pab);
+                    pn->pab.prune(1e-11);
+                    vpn[pn->second] = pn;
                 }
             }
         }
-    }
-
-    #pragma omp parallel
-    {
-        int tid = 0;
-        #ifdef _OPENMP
-        tid = omp_get_thread_num();
-        #endif
-
-        auto& localTriplets = tripletsPerThread[tid];
-
-        #pragma omp for schedule(dynamic)
-        for (int idx = 0; idx < static_cast<int>(combos.size()); ++idx) {
-            const int a = combos[idx][0];
-            const int b = combos[idx][1];
-            const int c = combos[idx][2];
-            const int d = combos[idx][3];
-
-            double value = 0.0;
-
-            const double qabcd = qaby6.coeff(a * n + b, c * n + d);
-            const double qacbd = qaby6.coeff(a * n + c, b * n + d);
-            const double qadbc = qaby6.coeff(a * n + d, b * n + c);
-            const double qbcad = qaby6.coeff(b * n + c, a * n + d);
-            const double qbdac = qaby6.coeff(b * n + d, a * n + c);
-            const double qcdab = qaby6.coeff(c * n + d, a * n + b);
-
-            value += (qabcd - qacbd + qadbc + qbcad - qbdac + qcdab) / 6.0;
-
-            if (std::abs(value) < 1e-11) {
-                continue;
-            }
-
-            const int base[4] = {a, b, c, d};
-
-            for (int p = 0; p < 24; ++p) {
-                const int i = base[perm[p][0]];
-                const int j = base[perm[p][1]];
-                const int k = base[perm[p][2]];
-                const int l = base[perm[p][3]];
-
-                const int row = i * n + k;
-                const int col = j * n + l;
-
-                localTriplets.emplace_back(row, col, sign[p] * value);
+        preCalPairMs.push_back(vpn);
+        preCalculateNewPairs(level + 1, levelEnd, pairs, preCalPairMs);
+    } else if (level == 2) {
+        const int n0 = pairs.size();
+        const int n1 = preCalPairMs[1].size();
+        vector<PairNew*> vpn;
+        vpn.resize(n1 * n1 * n0);
+        for (const auto& pni : pairs) {
+            for (const auto& pnj : preCalPairMs[0]) {
+                for (const auto& pnk : preCalPairMs[1]) {
+                    if (pnk != NULL) {
+                        PairNew* pn = new PairNew();
+                        pn->first = 2;
+                        pn->second = pni->index * n0 * n1 + pnj->second * n1 + pnk->second;
+                        //if (pnj->second >= pnk->second) pn->second = pni->index * n0 * n0 + pnj->second * n0 + pnk->second;
+                        //else pn->second = pni->index * n0 * n0 + pnk->second * n0 + pnj->second;
+                        pn->pab = 4 * (pnj->pab * pni->pab * pnk->pab + pnk->pab * pni->pab * pnj->pab);
+                        pn->pab.prune(1e-11);
+                        vpn[pn->second] = pn;
+                    }
+                }
             }
         }
+        preCalPairMs.push_back(vpn);
+        preCalculateNewPairs(level + 1, levelEnd, pairs, preCalPairMs);
+    } else {
+        vector<long long> ns;
+        for (int i = 0; i < level; ++i) {
+            ns.push_back(preCalPairMs[i].size());
+        }
     }
-
-    // 合并 triplets
-    std::vector<Eigen::Triplet<double>> allTriplets;
-    size_t totalSize = 0;
-    for (const auto& v : tripletsPerThread) {
-        totalSize += v.size();
-    }
-    allTriplets.reserve(totalSize);
-
-    for (auto& v : tripletsPerThread) {
-        allTriplets.insert(allTriplets.end(), v.begin(), v.end());
-    }
-
-    // 批量构造稀疏矩阵；如果有重复项则自动求和
-    qbar.setFromTriplets(allTriplets.begin(), allTriplets.end(),
-                         [](const double& x, const double& y) { return x + y; });
-
-    qbar.makeCompressed();
 
     return 0;
 }

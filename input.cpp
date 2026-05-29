@@ -47,9 +47,15 @@ int readSps(const string& filename, int& orbitProtonNumber, int& orbitNeutronNum
 }
 
 
-int readInput(int& Z, int& N, string& spsFile, string& pairFile, string& scFileP, string& scFileN,
-    int& interactionNumber,
-    vector<InteractionFile*>& interactionFiles, vector<int>& Js) {
+int readInput(int& Z,
+    int& N,
+    string& spsFile,
+    string& pairFile,
+    string& scFileP,
+    string& scFileN,
+    string& interactionType,
+    vector<vector<InteractionFile*>>& interactionFiles,
+    vector<int>& Js) {
 
     ifstream infile("shell.dat");
     if (infile.is_open()) {
@@ -82,23 +88,76 @@ int readInput(int& Z, int& N, string& spsFile, string& pairFile, string& scFileP
         iss >> scFileP >> scFileN;
         iss.clear();
 
+
         getline(infile, line);
         if (!line.empty() && line.back() == '\r') line.pop_back();
         iss.str(line);
-        iss >> tem;
-        interactionNumber = stoi(tem);
+        iss >> interactionType;
         iss.clear();
 
+        if (interactionType == "pn") {
+            int interactionNumber;
+            vector<InteractionFile*> ifs;
 
-        for (int i = 0; i < interactionNumber; i++) {
-            string filename, core, A, scale;
             getline(infile, line);
             if (!line.empty() && line.back() == '\r') line.pop_back();
             iss.str(line);
-            iss >> filename >> core >> A >> scale;
-            auto infi = new InteractionFile(filename, stoi(core), stoi(A), stod(scale));
-            interactionFiles.push_back(infi);
+            iss >> tem;
+            interactionNumber = stoi(tem);
             iss.clear();
+
+            for (int i = 0; i < interactionNumber; i++) {
+                string filename, core, A, scale;
+                getline(infile, line);
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                iss.str(line);
+                iss >> filename >> core >> A >> scale;
+                auto infi = new InteractionFile(filename, stoi(core), stoi(A), stod(scale));
+                ifs.push_back(infi);
+                iss.clear();
+            }
+            interactionFiles.push_back(ifs);
+            ifs.clear();
+
+            getline(infile, line);
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            iss.str(line);
+            iss >> tem;
+            interactionNumber = stoi(tem);
+            iss.clear();
+
+            for (int i = 0; i < interactionNumber; i++) {
+                string filename, core, A, scale;
+                getline(infile, line);
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                iss.str(line);
+                iss >> filename >> core >> A >> scale;
+                auto infi = new InteractionFile(filename, stoi(core), stoi(A), stod(scale));
+                ifs.push_back(infi);
+                iss.clear();
+            }
+            interactionFiles.push_back(ifs);
+            ifs.clear();
+
+            getline(infile, line);
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            iss.str(line);
+            iss >> tem;
+            interactionNumber = stoi(tem);
+            iss.clear();
+
+            for (int i = 0; i < interactionNumber; i++) {
+                string filename, core, A, scale;
+                getline(infile, line);
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                iss.str(line);
+                iss >> filename >> core >> A >> scale;
+                auto infi = new InteractionFile(filename, stoi(core), stoi(A), stod(scale));
+                ifs.push_back(infi);
+                iss.clear();
+            }
+            interactionFiles.push_back(ifs);
+            ifs.clear();
         }
 
         string tem2, gap;
@@ -178,7 +237,8 @@ int readPair(const string& filename, int& pairTypes, vector<Pair*>& pairs, int& 
 }
 
 
-int readInteraction(const string& filename, vector<Orbit*>& orbitsP, vector<Orbit*>& orbitsN,
+int readInteraction(const string& filename,
+    vector<Orbit*>& orbits,
     map<TBMEJ, map<pair<int, int>, double>>& tbmeJMap) {
     ifstream infile(filename);
     if (infile.is_open()) {
@@ -193,12 +253,8 @@ int readInteraction(const string& filename, vector<Orbit*>& orbitsP, vector<Orbi
         iss.str(line);
         iss >> total;
 
-        for (int i = 0; i < orbitsP.size(); i++) {
-            iss >> orbitsP[i]->spe;
-        }
-
-        for (int i = 0; i < orbitsN.size(); i++) {
-            iss >> orbitsN[i]->spe;
+        for (int i = 0; i < orbits.size(); i++) {
+            iss >> orbits[i]->spe;
         }
 
         iss.clear();
